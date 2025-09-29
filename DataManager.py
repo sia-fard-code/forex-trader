@@ -44,17 +44,43 @@ class DataManager:
                 ('adjusted_position_size_ask', 'f8'),
                 ('spread', 'f8'),
                 ('trade_approved', 'f8'),  # Added for ProfitabilityFilter
+                ('prob_profit_bid', 'f8'), # Probability for a profitable SHORT trade
+                ('prob_profit_ask', 'f8'), # Probability for a profitable LONG trade
+                ('previous_timestamp', 'O'),
             ]
         )
         self.index = 0  # Points to the next position to write
         self.size = 0   # Tracks the number of valid rows in the buffer
+        self.last_processed_timestamp = None
+        self.missing_ticks_count = 0
+
         # Cache for storing computed log returns
         self.cache = {
             'log_return_bid': {'current_ema': 0.0, 'previous_ema': 0.0, 'log_return': 0.0},
             'log_return_ask': {'current_ema': 0.0, 'previous_ema': 0.0, 'log_return': 0.0}
         }
 
-    def update(self, t, bid, ask,tick_id):
+    def add_tick(self, t, bid, ask,tick_id, timestamp):
+        """
+        Add a new tick to the buffer and update indicators.
+        :param t: Current timestamp.
+        :param bid: Bid price.
+        :param ask: Ask price.
+        """
+        if self.last_processed_timestamp is not None:
+            # Calculate the time difference in seconds
+            time_diff = (timestamp - self.last_processed_timestamp).total_seconds()
+            
+            # If the difference is greater than 1 second, we consider ticks to be missing
+            if time_diff > 1:
+                self.missing_ticks_count += int(time_diff - 1)
+        
+        self.last_processed_timestamp = timestamp
+        
+        # Update the buffer with new data
+        self.update(t, bid, ask, tick_id, self.last_processed_timestamp)
+
+    def update(self, t, bid, ask,tick_id, previous_timestamp):
         """
         Append new market data, compute indicators, and store it in the buffer.
         :param t: Current tick index.
@@ -83,7 +109,7 @@ class DataManager:
             tick_id, t, bid, ask, current_ema_bid, current_ema_ask,
             log_return_bid, log_return_ask, arithmetic_return_bid, arithmetic_return_ask,
             0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, spread, 0  # Added 0 for trade_approved
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, spread, 0,0,0, previous_timestamp  # Added 0 for trade_approved
         )
 
         # Update buffer metadata
@@ -257,3 +283,9 @@ class DataManager:
         
         # Update the specified column in the latest row
         self.data[key][last_index] = value
+
+    def get_missing_ticks_count(self):
+        """
+        Retrieve the total count of missing ticks detected.
+        """
+        return self.missing_ticks_count

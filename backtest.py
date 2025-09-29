@@ -126,11 +126,13 @@ def main():
     # ---------------------- Step 2: Initialize Parameters ----------------------
     config = {
         "buffer_size": total_points,
+        "profitability_factor": 1.5,
         "ema_window": 20,
-        "training_window_size": 3000,
-        "rolling_window_size": 2000,
+        "training_window_size": 6000,
+        "rolling_window_size": 4000,
         "forecast_steps": 2,
-        "num_simulations": 2,
+        "num_simulations": 500,
+        "simulation_steps": 200,
         "max_window_size": 10,
         "k": 8e-7,  # Reduced scaling factor
         "margin_requirement": 0.01,  # 1% margin requirement
@@ -169,6 +171,9 @@ def main():
 
 
     # ---------------------- Step 4: Analyze Results ----------------------
+    processing_stats = strategy.get_processing_time_stats()
+    logging.info(f"Tick Processing Time Statistics: {processing_stats}")
+    
     results = strategy.get_results()
     equity_curve = results["equity_curve"]
     balance = results["balance"]
@@ -184,15 +189,19 @@ def main():
     num_bullish = np.sum(refined_state == 1)
     num_bearish = np.sum(refined_state == -1)
     num_neutral = np.sum(refined_state == 0)
+    num_dropped = np.sum(refined_state == 10)  # Count dropped ticks
     # num_long = np.sum(positions['direction'] == 1)
     # num_short = np.sum(positions['direction'] == -1)
 
     logging.info(f"Number of Bullish states: {num_bullish}")
     logging.info(f"Number of Bearish states: {num_bearish}")
     logging.info(f"Number of Neutral states: {num_neutral}")
+    logging.info(f"Number of Dropped ticks: {num_dropped}")
     # logging.info(f"Number of Long: {num_long}")
     # logging.info(f"Number of Short: {num_short}")
-
+    # Verify the counts match
+    total_processed = num_bullish + num_bearish + num_neutral + num_dropped
+    logging.info(f"Total state counts: {total_processed} (should equal {len(data)})")
     # num_bullish = np.sum(initial_state == 1)
     # num_bearish = np.sum(initial_state == -1)
     # num_neutral = np.sum(initial_state == 0)
@@ -223,71 +232,92 @@ def plot_results(data, equity_curve, positions_bid, positions_ask, refined_state
     timestamps = data['timestamp'].values
     bid = data['bid'].values
     ask = data['ask'].values
-    total_points = len(data)
-    scaling_factor_plot = 100  # Scaling factor for visibility (adjust as needed)
-    marker_size_bid = (positions_bid * scaling_factor_plot)  # Marker sizes for f_bid
-    marker_size_ask = (positions_ask * scaling_factor_plot)  # Marker sizes for f_ask
+    scaling_factor_plot = 200
+    
+    # Calculate marker sizes
+    marker_size_bid = (positions_bid * scaling_factor_plot)
+    marker_size_ask = (positions_ask * scaling_factor_plot)
 
-    # Set default gray color
-    state_colors_bid = np.full((total_points, 3), [0.5, 0.5, 0.5])  # Gray for neutral state
-    state_colors_ask = np.full((total_points, 3), [0.5, 0.5, 0.5])  # Gray for neutral state
+    # Ensure arrays have the same length
+    if len(marker_size_bid) != len(timestamps):
+        marker_size_bid = np.zeros(len(timestamps))
+    if len(marker_size_ask) != len(timestamps):
+        marker_size_ask = np.zeros(len(timestamps))
 
-    state_colors_bid[refined_state == 1] = [0, 0, 1]  # Blue for Bullish on bid
-    state_colors_ask[refined_state == -1] = [1, 0, 0]  # Red for Bearish on ask
     # Define pip increment for grid
-    pip_value = 0.0001  # Set this based on the currency pair
-    pip_increment = 2  # Number of pips per gridline
+    pip_value = 0.0001
+    pip_increment = 2
     pip_step = pip_value * pip_increment
 
     fig, ax1 = plt.subplots(figsize=(14, 8))
 
-    # Plot bid and ask prices on the primary y-axis
+    # Plot bid and ask prices
     ax1.plot(timestamps, bid, color='black', linewidth=0.5, label='Bid')
     ax1.plot(timestamps, ask, color='gray', linestyle='--', linewidth=0.5, label='Ask')
+    
     # Add pip-based gridlines
     min_price = min(min(bid), min(ask))
     max_price = max(max(bid), max(ask))
-
-    # Set y-ticks based on pip increments
     yticks = np.arange(min_price, max_price, pip_step)
     ax1.set_yticks(yticks)
-    ax1.yaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x:.5f}"))  # Format as a 5-decimal price
+    ax1.yaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x:.5f}"))
     ax1.grid(axis='y', which='major', linestyle='--', linewidth=0.5)
 
-    # Add titles and labels
-    # ax1.set_title('Bid and Ask Prices with Pip-Based Grid')
-    # ax1.set_xlabel('Time')
-    # ax1.set_ylabel('Price (Pips)')
-    # Ensure marker_size_bid and marker_size_ask have the same length as timestamps
-    if len(marker_size_bid) != len(timestamps):
-        marker_size_bid = np.zeros(len(timestamps))
+    # Create masks for different states
+    bullish_mask = refined_state == 1
+    bearish_mask = refined_state == -1
+    dropped_mask = refined_state == 10
+    
+    # Plot Bullish positions (non-zero sizes only)
+    if np.any(bullish_mask & (marker_size_bid > 0)):
+        bullish_indices = bullish_mask & (marker_size_bid > 0)
+        ax1.scatter(
+            timestamps[bullish_indices],
+            bid[bullish_indices],
+            c='blue',
+            s=marker_size_bid[bullish_indices],
+            alpha=0.6,
+            label='Bullish Positions (f_bid)'
+        )
 
-    if len(marker_size_ask) != len(timestamps):
-        marker_size_ask = np.zeros(len(timestamps))
+    # Plot Bearish positions (non-zero sizes only)  
+    if np.any(bearish_mask & (marker_size_ask > 0)):
+        bearish_indices = bearish_mask & (marker_size_ask > 0)
+        ax1.scatter(
+            timestamps[bearish_indices],
+            ask[bearish_indices],
+            c='red',
+            s=marker_size_ask[bearish_indices],
+            alpha=0.6,
+            label='Bearish Positions (f_ask)'
+        )
 
-    # Plot Bullish and Bearish positions with marker sizes based on f_bid and f_ask
-    ax1.scatter(
-        timestamps,
-        bid,
-        c='blue',
-        s=marker_size_bid,
-        alpha=0.6,
-        label='Bullish Positions (f_bid)'
-    )
-    ax1.scatter(
-        timestamps,
-        ask,
-        c='red',
-        s=marker_size_ask,
-        alpha=0.6,
-        label='Bearish Positions (f_ask)'
-    )
+    # Plot Dropped ticks with fixed small size for visibility
+    if np.any(dropped_mask):
+        dropped_size = 20  # Fixed small size for visibility
+        ax1.scatter(
+            timestamps[dropped_mask],
+            bid[dropped_mask],
+            c='lightgray',
+            s=dropped_size,
+            alpha=0.7,
+            marker='x',  # Use 'x' marker to distinguish from circles
+            label='Dropped Ticks (Bid)'
+        )
+        ax1.scatter(
+            timestamps[dropped_mask],
+            ask[dropped_mask],
+            c='lightgray',
+            s=dropped_size,
+            alpha=0.7,
+            marker='x',
+            label='Dropped Ticks (Ask)'
+        )
 
     # Configure the primary y-axis
     ax1.set_xlabel('Time')
     ax1.set_ylabel('Price (Pips)')
     ax1.set_title('Bid and Ask Prices with Market States and Position Sizes')
-    # ax1.grid(True)
 
     # Format the x-axis for timestamps
     ax1.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S'))
@@ -299,26 +329,26 @@ def plot_results(data, equity_curve, positions_bid, positions_ask, refined_state
     # Plot position sizes on the secondary y-axis
     ax2.plot(timestamps, positions_bid, color='blue', alpha=0.3, label='Position Size Bid')
     ax2.plot(timestamps, positions_ask, color='red', alpha=0.3, label='Position Size Ask')
-    # ax2.plot(timestamps, position_size_ewma_combined, color='gray', alpha=0.3, label='Position Size EWMA')
 
     # Configure the secondary y-axis
     ax2.set_ylabel('Position Size (Fraction of Equity)')
-    # Adjust ylim for visibility based on actual data
-    max_f_bid = np.nanmax(positions_bid)# if np.max(positions_bid) > 0 else 1
-    max_f_ask = np.nanmax(positions_ask)# if np.max(positions_ask) > 0 else 1
-    ax2.set_ylim(0, max(max_f_bid, max_f_ask) * 1.1)  # 10% buffer
+    max_f_bid = np.nanmax(positions_bid)
+    max_f_ask = np.nanmax(positions_ask)
+    ax2.set_ylim(0, max(max_f_bid, max_f_ask) * 1.1)
     ax2.legend(loc='upper right')
 
-    # Create custom legend handles for marker sizes
+    # Create custom legend handles
     legend_elements = [
         Line2D([0], [0], marker='o', color='w', label='Bullish Positions (f_bid)',
                markerfacecolor='blue', markersize=10, alpha=0.6),
         Line2D([0], [0], marker='o', color='w', label='Bearish Positions (f_ask)',
-               markerfacecolor='red', markersize=10, alpha=0.6)
+               markerfacecolor='red', markersize=10, alpha=0.6),
+        Line2D([0], [0], marker='x', color='w', label='Dropped Ticks',
+               markerfacecolor='lightgray', markersize=8, alpha=0.7)
     ]
 
-    # Optional: Define a reference position size for the legend
-    reference_f = 0.1  # Example reference position size
+    # Reference position size handle
+    reference_f = 0.1
     reference_marker_size = reference_f * scaling_factor_plot
     reference_handle = Line2D(
         [0], [0],
@@ -330,11 +360,19 @@ def plot_results(data, equity_curve, positions_bid, positions_ask, refined_state
         alpha=0.6
     )
 
-    # Add the custom legend to the plot
+    # Add the custom legend
     ax1.legend(handles=legend_elements + [reference_handle], loc='upper left')
 
-    plt.show()
+    # Print debug info
+    num_dropped = np.sum(dropped_mask)
+    num_bullish = np.sum(bullish_mask)
+    num_bearish = np.sum(bearish_mask)
+    
+    print(f"Debug: Dropped ticks to plot: {num_dropped}")
+    print(f"Debug: Bullish ticks: {num_bullish}")
+    print(f"Debug: Bearish ticks: {num_bearish}")
 
+    plt.show()
 # def plot_results(data, equity_curve, positions_bid, positions_ask, refined_state, positions):
 #     """
 #     Plot the results of the backtest, including:

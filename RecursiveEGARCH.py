@@ -182,7 +182,15 @@ class RecursiveEGARCH:
         omega = self.params.get('omega', 0.0)
         alpha = self.params.get('alpha[1]', 0.0)
         beta = self.params.get('beta[1]', 0.0)
-        self.long_term_vol = np.sqrt(omega / (1 - alpha - beta)) if (1 - alpha - beta) > 0 else 1e-4
+
+        denominator = (1 - alpha - beta)
+        if denominator > 0 and omega >= 0:
+            self.long_term_vol = np.sqrt(omega / denominator)
+        else:
+            # If the model is not stationary or omega is negative, set a default small positive value
+            self.long_term_vol = 1e-4
+
+        # self.long_term_vol = np.sqrt(omega / (1 - alpha - beta)) if (1 - alpha - beta) > 0 else 1e-4
 
         scaled_volatility = np.array(self.fitted_model.conditional_volatility)
         self.conditional_volatility = scaled_volatility.tolist()
@@ -234,7 +242,13 @@ class RecursiveEGARCH:
         
         # Append to conditional volatility
         self.conditional_volatility.append(new_volatility)
-        self.long_term_vol = np.sqrt(omega / (1 - alpha - beta)) if (1 - alpha - beta) > 0 else 1e-4
+        denominator = (1 - alpha - beta)
+        if denominator > 0 and omega >= 0:
+            self.long_term_vol = np.sqrt(omega / denominator)
+        else:
+            # If the model is not stationary or omega is negative, set a default small positive value
+            self.long_term_vol = 1e-4
+        # self.long_term_vol = np.sqrt(omega / (1 - alpha - beta)) if (1 - alpha - beta) > 0 else 1e-4
         
         return new_volatility
     
@@ -265,4 +279,32 @@ class RecursiveEGARCH:
         avg_volatility = simulations.mean(axis=0)
         return avg_volatility
 
+    def simulate_volatility_paths(self, steps=1, num_simulations=1):
+        """
+        Simulate future volatility paths for the given number of steps using Monte Carlo simulations
+        and return the entire distribution of paths.
+        """
+        if not self.fitted_model:
+            raise ValueError("Model not trained yet.")
+
+        last_volatility = self.conditional_volatility[-1]
+        simulated_vol_paths = np.zeros((num_simulations, steps))
+        vol = np.full((num_simulations,), last_volatility)
+
+        for step in range(steps):
+            z = np.random.normal(0, 1, size=num_simulations)
+            ln_sigma_sq = (
+                self.params.get('omega', 0.0)
+                + self.params.get('alpha[1]', 0.0) * (np.abs(z) - np.sqrt(2 / np.pi))
+                + self.params.get('gamma[1]', 0.0) * z
+                + self.params.get('beta[1]', 0.0) * np.log(vol**2)
+            )
+            ln_sigma_sq = np.clip(ln_sigma_sq, -1e4, 1e4)
+            vol = np.exp(ln_sigma_sq / 2)
+            vol = np.clip(vol, 1e-8, 1e6)  # Cap volatility
+            simulated_vol_paths[:, step] = vol
+
+        # --- MODIFICATION ---
+        # Return the entire array of paths, not the mean.
+        return simulated_vol_paths
 

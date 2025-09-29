@@ -25,24 +25,36 @@ class MarketProcessing:
 
         # Scaling factor for normalization
         self.scaling_factor = 1.0
+        self.simulation_steps = self.config.get("simulation_steps", 200)
+        self.num_simulations = self.config.get("num_simulations", 5000)
+        self.profitability_factor = self.config.get("profitability_factor", 1.5)
 
     def process_tick(self, t):
         """
-        Process a single tick for the specified price type.
-        Includes training, updating, and simulating volatility.
-        :param t: Current time index.
+        Process a single tick: train or update model, forecast volatility,
+        and calculate the probability of a profitable trade.
         """
         if not self.training_done:
             self._train_model()
         else:
+            # 1. Update model and get single-step forecast (as before)
             forecast_vol = self._update_model()
-
-            # Save forecasted volatility to DataManager
             self.data_manager.set(f"forecasted_vol_{self.price_type}", forecast_vol)
 
-            # Perform multi-step simulation and set forecasted change
-            forecasted_change = self._simulate_volatility(t)
+
+
+            # 4. Keep the old simulation for forecasted_change if needed elsewhere
+            # This part is now optional depending on your strategy needs.
+
+            self.simulated_vol_paths = self.model.simulate_volatility_paths(
+                 steps=self.config.get("simulation_steps", 10),
+                num_simulations=self.config.get("num_simulations", 5000)
+            )
+            forecasted_change = self.simulated_vol_paths.mean(axis=0)[0] * self.data_manager.get_latest_value(f"ema_{self.price_type}")
+
+            # forecasted_change = self.model.simulate(steps=10)[0] * self.data_manager.get_latest_value(f"ema_{self.price_type}")
             self.data_manager.set_config(f"forecasted_{self.price_type}_change", forecasted_change)
+
     def _train_model(self):
         """
         Train the EGARCH model for the specified price type.
