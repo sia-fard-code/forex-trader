@@ -402,7 +402,7 @@ class LivePlotManager:
             
             # Max Points Slider
             points_ax = plt.axes([0.60, 0.12, 0.20, 0.03])
-            self.points_slider = Slider(points_ax, 'Buffer', 100, 2000, 
+            self.points_slider = Slider(points_ax, 'Buffer', 100, 5000, 
                                       valinit=self.max_display_points, valfmt='%d pts',
                                       facecolor='#f7dc6f', alpha=0.8)
             self.points_slider.on_changed(self._update_max_points)
@@ -537,9 +537,32 @@ class LivePlotManager:
             logging.debug(f"Mouse motion event error: {e}")
 
     def _switch_to_manual_mode(self, reason):
-        """✅ NEW: Switch from auto-scroll to manual mode"""
+        """✅ PERFECT: Switch to manual mode and auto-expand buffer"""
         try:
             self.manual_mode = True
+            
+            # ✅ YOUR BRILLIANT FIX: Auto-expand buffer when going manual
+            total_size = self.data_manager.get_size()
+            if total_size > self.max_display_points:
+                old_buffer = self.max_display_points
+                
+                # Temporarily increase buffer to show all data
+                self.max_display_points = total_size
+                
+                # Force refresh with all data
+                all_data = self._get_plot_window_bypass_cache(total_size)
+                if all_data:
+                    self._render_extended_plot_elements(all_data)
+                    
+                    # Update slider to reflect new buffer size
+                    if hasattr(self, 'points_slider'):
+                        self.points_slider.set_val(total_size)
+                    
+                    logging.info(f"🎯 Auto-expanded buffer: {old_buffer} → {total_size} points for manual mode")
+                else:
+                    # Fallback if bypass method fails
+                    self.max_display_points = old_buffer
+                    logging.warning("⚠️ Buffer expansion failed, reverted to original size")
             
             # Update button appearance
             if self.auto_scroll_button:
@@ -559,6 +582,14 @@ class LivePlotManager:
                 # If in manual mode, switch back to auto-scroll
                 self.manual_mode = False
                 self.auto_scroll = True
+                # ✅ OPTIONAL: Reset buffer to original size for performance
+                original_buffer = 2000  # or whatever your default was
+                if self.max_display_points > original_buffer * 2:
+                    self.max_display_points = original_buffer
+                    if hasattr(self, 'points_slider'):
+                        self.points_slider.set_val(original_buffer)
+                    logging.info(f"🎯 Reset buffer to {original_buffer} points for auto-scroll performance")
+                                
                 self.auto_scroll_button.label.set_text('📜 Auto ON')
                 self.auto_scroll_button.color = '#27ae60'  # Green for auto
                 
@@ -642,7 +673,7 @@ class LivePlotManager:
 
     def _handle_axis_scaling(self, plot_data):
         """
-        ✅ PERFECT: Smart axis scaling with mouse-triggered manual mode
+        ✅ SIMPLIFIED: No more complex extended data detection
         """
         timestamps = plot_data['timestamps']
         
@@ -651,65 +682,102 @@ class LivePlotManager:
         
         for i, ax in enumerate(self.axes):
             try:
-                current_xlim = ax.get_xlim()
-                
                 # Always update data ranges
                 ax.relim()
                 
-                # ✅ SMART BEHAVIOR: Auto-scroll unless in manual mode
+                # Simple auto-scroll vs manual mode
                 if self.auto_scroll and not self.manual_mode and len(timestamps) > 10:
-                    # AUTO-SCROLL MODE: Follow latest data
-                    
-                    # Temporarily disable sync during auto-scroll
+                    # AUTO-SCROLL MODE
                     was_syncing = getattr(self, 'sync_navigation', True)
                     if hasattr(self, 'sync_navigation'):
                         self.sync_navigation = False
                     
                     try:
-                        # Show latest data window
-                        if len(timestamps) > self.max_display_points:
-                            # Show most recent max_display_points
-                            display_start = len(timestamps) - self.max_display_points
-                            display_timestamps = timestamps[display_start:]
-                        else:
-                            display_timestamps = timestamps
+                        ax.autoscale_view()
                         
-                        if len(display_timestamps) > 1:
-                            time_span = display_timestamps[-1] - display_timestamps[0]
-                            margin = time_span * 0.02  # 2% margin
-                            new_xlim = (display_timestamps[0] - margin, display_timestamps[-1] + margin)
-                            
-                            # Set new limits
+                        if len(timestamps) > 1:
+                            time_span = timestamps[-1] - timestamps[0]
+                            margin = time_span * 0.02
+                            new_xlim = (timestamps[0] - margin, timestamps[-1] + margin)
                             ax.set_xlim(new_xlim)
-                            
-                            # Store as "system set" limits (not user interaction)
                             self._user_xlim_overrides[i] = new_xlim
                         
-                        # Auto-scale Y axis
-                        ax.autoscale_view(scalex=False, scaley=True)
-                        
-                        # Update last auto-scroll time
                         self._last_auto_scroll_time = time.time()
                         
                     finally:
-                        # Restore sync setting
                         if hasattr(self, 'sync_navigation'):
                             self.sync_navigation = was_syncing
                             
                 else:
-                    # MANUAL MODE: Preserve user view, only auto-scale Y
+                    # MANUAL MODE: Just auto-scale Y axis
+                    # No complex extended data loading - your solution handles this!
                     ax.autoscale_view(scalex=False, scaley=True)
                     
-                    # Don't update stored xlim - keep user's view
                     if i not in self._user_xlim_overrides:
-                        self._user_xlim_overrides[i] = current_xlim
+                        self._user_xlim_overrides[i] = ax.get_xlim()
                 
-                # ✅ ENHANCED: Smart Y-axis scaling for price chart
-                if i == 0 and len(plot_data['bid_prices']) > 0 and len(plot_data['ask_prices']) > 0:
+                # Smart Y-scaling for price chart
+                if i == 0 and len(plot_data['bid_prices']) > 0:
                     self._smart_price_y_scaling(ax, plot_data, ax.get_xlim())
                     
             except Exception as e:
                 logging.debug(f"Axis scaling warning for axis {i}: {e}")
+
+    def _render_extended_plot_elements(self, extended_data, axis_index=None):
+        """
+        ✅ NEW: Render extended historical data to specific axis or all axes
+        """
+        try:
+            timestamps = extended_data['timestamps']
+            
+            if len(timestamps) == 0:
+                return
+            
+            axes_to_update = [axis_index] if axis_index is not None else range(len(self.axes))
+            
+            for i in axes_to_update:
+                if i >= len(self.axes):
+                    continue
+                    
+                ax = self.axes[i]
+                
+                # ✅ RENDER EXTENDED DATA based on axis type
+                if i == 0:  # Price chart
+                    # Update price lines with extended data
+                    if len(extended_data['bid_prices']) > 0:
+                        self.bid_line.set_data(timestamps, extended_data['bid_prices'])
+                        self.ask_line.set_data(timestamps, extended_data['ask_prices'])
+                        
+                        # Update position markers with extended data
+                        self._update_position_markers(extended_data)
+                        
+                        logging.debug(f"✅ Updated price chart with {len(timestamps)} extended points")
+                    
+                elif i == 1:  # Equity/Balance chart
+                    if len(extended_data['equity']) > 0:
+                        self.equity_line.set_data(timestamps, extended_data['equity'])
+                        self.balance_line.set_data(timestamps, extended_data['balance'])
+                        
+                        logging.debug(f"✅ Updated equity/balance chart with {len(timestamps)} extended points")
+                    
+                elif i == 2:  # Market State chart
+                    if len(extended_data['refined_states']) > 0:
+                        self.state_line.set_data(timestamps, extended_data['refined_states'])
+                        
+                        logging.debug(f"✅ Updated market state chart with {len(timestamps)} extended points")
+                    
+                elif i == 3:  # Position Sizes chart
+                    if len(extended_data['position_sizes_bid']) > 0:
+                        self.pos_bid_line.set_data(timestamps, extended_data['position_sizes_bid'])
+                        self.pos_ask_line.set_data(timestamps, extended_data['position_sizes_ask'])
+                        
+                        logging.debug(f"✅ Updated position sizes chart with {len(timestamps)} extended points")
+            
+            # Force canvas redraw
+            self.fig.canvas.draw_idle()
+            
+        except Exception as e:
+            logging.error(f"❌ Error rendering extended plot elements: {e}")
 
     def _user_modified_view(self, axis_index, current_xlim):
         """✅ ENHANCED: Better detection with auto-scroll awareness"""
@@ -942,7 +1010,6 @@ class LivePlotManager:
                     elif event.key == 'r':  # 'R' key resets to auto-scroll
                         self._reset_data(None)
                         logging.info("⌨️ Reset to auto-scroll via 'R' key")
-                        
                     elif event.key == 'a':  # 'A' key returns to auto-scroll
                         if hasattr(self, 'manual_mode') and self.manual_mode:
                             self.manual_mode = False
@@ -953,12 +1020,7 @@ class LivePlotManager:
                                 self.auto_scroll_button.color = '#27ae60'
                                 self.fig.canvas.draw_idle()
                             logging.info("⌨️ Returned to auto-scroll via 'A' key")
-                            
-                    elif event.key == 'h':  # 'H' key goes to latest data
-                        if hasattr(self, 'force_auto_scroll_update'):
-                            self.force_auto_scroll_update()
-                            logging.info("⌨️ Jumped to latest data via 'H' key")
-                            
+                                                        
                     elif event.key == 'p':  # 'P' key toggles pause/resume
                         if hasattr(self, '_toggle_pause'):
                             self._toggle_pause(None)
@@ -1057,6 +1119,73 @@ class LivePlotManager:
             import traceback
             traceback.print_exc()
 
+    def _get_plot_window_bypass_cache(self, window_size):
+        """
+        ✅ NEW: Get plot window bypassing cache and buffer limits
+        Used for extended historical data loading
+        """
+        try:
+            current_size = self.data_manager.get_size()
+            
+            if current_size == 0:
+                return self._empty_plot_data()
+            
+            # Use requested window size directly (bypass normal limits)
+            actual_window = min(window_size, current_size)
+            
+            logging.debug(f"📊 Bypass cache: requesting {window_size}, DM size: {current_size}, using: {actual_window}")
+            
+            # Get data from DataManager
+            window_data = self.data_manager.get_window_data(actual_window)
+            
+            if window_data is None:
+                logging.error("❌ DataManager returned None")
+                return self._empty_plot_data()
+                
+            actual_returned = len(window_data)
+            logging.debug(f"📊 DataManager returned {actual_returned} points")
+            
+            # Convert to plot format (same as regular _get_plot_window)
+            available_fields = window_data.dtype.names
+            
+            # Timestamps
+            if 'previous_timestamp' in available_fields:
+                raw_timestamps = window_data['previous_timestamp']
+            elif 'timestamp' in available_fields:
+                raw_timestamps = window_data['timestamp']
+            else:
+                raw_timestamps = np.arange(len(window_data))
+            
+            # Convert timestamps for matplotlib
+            try:
+                if len(raw_timestamps) > 0 and hasattr(raw_timestamps[0], 'timestamp'):
+                    import matplotlib.dates as mdates
+                    timestamps = mdates.date2num([ts for ts in raw_timestamps])
+                else:
+                    timestamps = raw_timestamps.astype(float)
+            except:
+                timestamps = np.arange(len(window_data), dtype=float)
+            
+            plot_data = {
+                'timestamps': timestamps,
+                'bid_prices': window_data['bid'].astype(float),
+                'ask_prices': window_data['ask'].astype(float), 
+                'equity': window_data['equity'].astype(float),
+                'balance': window_data['balance'].astype(float),
+                'refined_states': window_data['refined_state'].astype(float),
+                'position_sizes_bid': window_data['adjusted_position_size_bid'].astype(float),
+                'position_sizes_ask': window_data['adjusted_position_size_ask'].astype(float),
+                'pnl': window_data['pnl'].astype(float),
+                'trades': self._extract_trade_signals(window_data)
+            }
+            
+            logging.debug(f"✅ Bypass cache successful: {len(plot_data['timestamps'])} points")
+            return plot_data
+            
+        except Exception as e:
+            logging.error(f"❌ Bypass cache failed: {e}")
+            return self._empty_plot_data()
+    
     def _update_position_markers(self, plot_data):
         """✅ ENHANCED POSITION MARKERS: Based on DataManager's refined_state"""
         timestamps = plot_data['timestamps']
@@ -1159,39 +1288,6 @@ class LivePlotManager:
         if self.update_count % 100 == 0:
             logging.info(f"🎨 Plot update #{self.update_count}: {data_points} points, "
                         f"{arrow_count} arrows, speed: {self.speed_multiplier:.1f}x")
-
-    def _needs_historical_data(self, xlim, timestamps):
-        """Check if we need to load more historical data"""
-        if len(timestamps) == 0:
-            return False
-            
-        # Simple heuristic: if view extends before our current data start
-        try:
-            if hasattr(timestamps[0], 'timestamp'):  # pandas Timestamp
-                return xlim[0] < timestamps[0].timestamp()
-            else:
-                return xlim[0] < timestamps[0]
-        except:
-            return False
-
-    def _get_extended_historical_data(self, xlim):
-        """✅ EXTENDED DATA LOADING: From DataManager's full history"""
-        try:
-            # Calculate required time range
-            time_span = xlim[1] - xlim[0]
-            
-            # Get larger window from DataManager (up to full buffer)
-            extended_window = min(self.max_display_points * 3, 
-                                self.data_manager.get_size())
-            
-            if extended_window > self.max_display_points:
-                logging.info(f"📊 Loading extended historical data: {extended_window} points")
-                return self._get_plot_window(extended_window)
-            
-            return None
-        except Exception as e:
-            logging.error(f"Extended data query failed: {e}")
-            return None
 
     def _ensure_latest_data_visible(self, ax, timestamps):
         """Ensure latest data appears on right side"""
