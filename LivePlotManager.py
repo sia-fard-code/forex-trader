@@ -102,6 +102,16 @@ class LivePlotManager:
         self._is_syncing = False  # Prevent infinite loops        
         # Debug counter
         self.update_count = 0
+        # ✅ ADD: Auto-scroll control
+        self.auto_scroll = True  # Enable/disable auto-scroll
+        self.manual_mode = False  # Track if user is in manual mode
+        self._last_auto_scroll_time = time.time()
+        # Mouse interaction tracking
+        self._mouse_pressed = False
+        self._mouse_interaction_detected = False
+        self._last_mouse_interaction = 0        
+        # ✅ ADD: Auto-scroll toggle button (will be created in setup)
+        self.auto_scroll_button = None
         
         self._setup_plot()
     
@@ -324,6 +334,7 @@ class LivePlotManager:
             # Event connections
             self.fig.canvas.mpl_connect('resize_event', self._on_resize)
             self.fig.canvas.mpl_connect('close_event', self._on_close)
+            self._setup_mouse_interaction_detection()
             
             logging.info("Enhanced LivePlotManager with DataManager integration initialized")
             
@@ -373,29 +384,36 @@ class LivePlotManager:
             self.sync_button.label.set_fontweight('bold')
             self.sync_button.on_clicked(self._toggle_sync)
             
-            # ✅ ADJUSTED: Move sliders to accommodate sync button
+            # ✅ NEW: Auto-Scroll Toggle Button
+            auto_scroll_ax = plt.axes([0.48, 0.16, 0.09, 0.05])
+            self.auto_scroll_button = Button(auto_scroll_ax, '📜 Auto ON',  # Start as Auto ON
+                                        color='#27ae60', hovercolor='#2ecc71')  # Green = Auto
+            self.auto_scroll_button.label.set_fontweight('bold')
+            self.auto_scroll_button.on_clicked(self._toggle_auto_scroll)
+            
+            # ✅ ADJUSTED: Move sliders to accommodate auto-scroll button
             # Speed Control Slider
-            speed_ax = plt.axes([0.50, 0.17, 0.22, 0.03])  # Adjusted position
+            speed_ax = plt.axes([0.60, 0.17, 0.20, 0.03])  # Adjusted position
             self.speed_slider = Slider(speed_ax, 'Speed', 0.1, 5.0, 
-                                    valinit=1.0, valfmt='%.1fx', 
-                                    facecolor='#96ceb4', alpha=0.8)
+                                     valinit=1.0, valfmt='%.1fx', 
+                                     facecolor='#96ceb4', alpha=0.8)
             self.speed_slider.on_changed(self._update_speed)
             
             # Max Points Slider
-            points_ax = plt.axes([0.50, 0.12, 0.22, 0.03])
+            points_ax = plt.axes([0.60, 0.12, 0.20, 0.03])
             self.points_slider = Slider(points_ax, 'Buffer', 100, 2000, 
-                                    valinit=self.max_display_points, valfmt='%d pts',
-                                    facecolor='#f7dc6f', alpha=0.8)
+                                      valinit=self.max_display_points, valfmt='%d pts',
+                                      facecolor='#f7dc6f', alpha=0.8)
             self.points_slider.on_changed(self._update_max_points)
             
             # ✅ ADJUSTED: Status text positions
-            self.status_text = self.fig.text(0.75, 0.17, '⏸️ Paused - Click Resume to start', 
-                                        fontsize=12, fontweight='bold', color='#e67e22')
-            self.stats_text = self.fig.text(0.75, 0.14, 'DataManager: Ready | Arrows: 0', 
-                                        fontsize=11, color='#2c3e50')
-            self.speed_text = self.fig.text(0.75, 0.11, 'Speed: 1.0x', 
-                                        fontsize=11, color='#2c3e50')
-
+            self.status_text = self.fig.text(0.83, 0.17, '⏸️ Paused - Click Resume to start', 
+                                           fontsize=11, fontweight='bold', color='#e67e22')
+            self.stats_text = self.fig.text(0.83, 0.14, 'DataManager: Ready | Arrows: 0', 
+                                          fontsize=10, color='#2c3e50')
+            self.speed_text = self.fig.text(0.83, 0.11, 'Speed: 1.0x', 
+                                          fontsize=10, color='#2c3e50')
+            
                         
         except Exception as e:
             logging.error(f"Error setting up controls: {e}")
@@ -446,6 +464,315 @@ class LivePlotManager:
 
             # ✅ ADD: Setup synchronized navigation after axes creation
             self._setup_synchronized_navigation()
+
+    def _setup_mouse_interaction_detection(self):
+        """
+        ✅ NEW: Setup mouse interaction detection for smart auto-scroll
+        """
+        try:
+            # Connect mouse events to detect user interaction
+            self.fig.canvas.mpl_connect('button_press_event', self._on_mouse_press)
+            self.fig.canvas.mpl_connect('scroll_event', self._on_mouse_scroll)
+            self.fig.canvas.mpl_connect('motion_notify_event', self._on_mouse_motion)
+            
+            # Track mouse interaction state
+            self._mouse_pressed = False
+            self._mouse_interaction_detected = False
+            self._last_mouse_interaction = 0
+            
+            logging.info("✅ Mouse interaction detection enabled for smart auto-scroll")
+            
+        except Exception as e:
+            logging.error(f"Failed to setup mouse interaction detection: {e}")
+
+    def _on_mouse_press(self, event):
+        """✅ NEW: Handle mouse press events"""
+        try:
+            # Check if mouse press is on one of our plot axes
+            if event.inaxes in self.axes:
+                self._mouse_pressed = True
+                self._mouse_interaction_detected = True
+                self._last_mouse_interaction = time.time()
+                
+                # Switch to manual mode if we're in auto-scroll
+                if self.auto_scroll and not self.manual_mode:
+                    self._switch_to_manual_mode("mouse click")
+                    
+        except Exception as e:
+            logging.debug(f"Mouse press event error: {e}")
+
+    def _on_mouse_scroll(self, event):
+        """✅ NEW: Handle mouse scroll (zoom) events"""
+        try:
+            # Check if scroll is on one of our plot axes  
+            if event.inaxes in self.axes:
+                self._mouse_interaction_detected = True
+                self._last_mouse_interaction = time.time()
+                
+                # Switch to manual mode if we're in auto-scroll
+                if self.auto_scroll and not self.manual_mode:
+                    self._switch_to_manual_mode("mouse scroll/zoom")
+                    
+        except Exception as e:
+            logging.debug(f"Mouse scroll event error: {e}")
+
+    def _on_mouse_motion(self, event):
+        """✅ NEW: Handle mouse motion (pan) events"""
+        try:
+            # Only care about motion when mouse is pressed (dragging)
+            if self._mouse_pressed and event.inaxes in self.axes:
+                self._mouse_interaction_detected = True
+                self._last_mouse_interaction = time.time()
+                
+                # Switch to manual mode if we're in auto-scroll
+                if self.auto_scroll and not self.manual_mode:
+                    self._switch_to_manual_mode("mouse pan/drag")
+            
+            # Reset mouse pressed state if no buttons are pressed
+            if hasattr(event, 'button') and event.button is None:
+                self._mouse_pressed = False
+                    
+        except Exception as e:
+            logging.debug(f"Mouse motion event error: {e}")
+
+    def _switch_to_manual_mode(self, reason):
+        """✅ NEW: Switch from auto-scroll to manual mode"""
+        try:
+            self.manual_mode = True
+            
+            # Update button appearance
+            if self.auto_scroll_button:
+                self.auto_scroll_button.label.set_text('📜 Manual')
+                self.auto_scroll_button.color = '#f39c12'  # Orange for manual
+                self.fig.canvas.draw_idle()
+            
+            logging.info(f"📜 Switched to MANUAL mode due to: {reason}")
+            
+        except Exception as e:
+            logging.error(f"Failed to switch to manual mode: {e}")
+
+    def _toggle_auto_scroll(self, event):
+        """✅ ENHANCED: Smart auto-scroll toggle"""
+        try:
+            if self.manual_mode:
+                # If in manual mode, switch back to auto-scroll
+                self.manual_mode = False
+                self.auto_scroll = True
+                self.auto_scroll_button.label.set_text('📜 Auto ON')
+                self.auto_scroll_button.color = '#27ae60'  # Green for auto
+                
+                # Reset to latest data
+                self._reset_to_auto_scroll()
+                
+                logging.info("📜 Switched back to AUTO-SCROLL mode")
+                
+            else:
+                # If in auto mode, toggle auto-scroll on/off
+                self.auto_scroll = not self.auto_scroll
+                
+                if self.auto_scroll:
+                    self.auto_scroll_button.label.set_text('📜 Auto ON')
+                    self.auto_scroll_button.color = '#27ae60'  # Green
+                    self.manual_mode = False
+                    self._reset_to_auto_scroll()
+                    logging.info("📜 AUTO-SCROLL ENABLED")
+                else:
+                    self.auto_scroll_button.label.set_text('📜 Auto OFF')
+                    self.auto_scroll_button.color = '#95a5a6'  # Gray
+                    self.manual_mode = True
+                    logging.info("📜 AUTO-SCROLL DISABLED")
+            
+            self.fig.canvas.draw_idle()
+            
+        except Exception as e:
+            logging.error(f"Failed to toggle auto-scroll: {e}")
+
+    def _reset_to_auto_scroll(self):
+        """✅ NEW: Reset all axes to show latest data"""
+        try:
+            # Clear user interaction overrides
+            self._user_xlim_overrides = {}
+            
+            # Force auto-scale on next update
+            self._last_auto_scroll_time = time.time()
+            
+            # If we have data, immediately scroll to latest
+            plot_data = self._get_plot_window()
+            if len(plot_data['timestamps']) > 0:
+                self._force_auto_scroll_to_latest(plot_data)
+            
+            logging.info("📜 Reset to auto-scroll mode - showing latest data")
+            
+        except Exception as e:
+            logging.error(f"Failed to reset to auto-scroll: {e}")
+
+    def _force_auto_scroll_to_latest(self, plot_data):
+        """✅ NEW: Force all axes to show latest data"""
+        try:
+            timestamps = plot_data['timestamps']
+            if len(timestamps) < 2:
+                return
+            
+            # Calculate auto-scroll window
+            total_span = timestamps[-1] - timestamps[0]
+            display_span = total_span * 0.8  # Show 80% of available data
+            
+            # Set all axes to show latest data
+            new_xlim = (timestamps[-1] - display_span, timestamps[-1])
+            
+            # Temporarily disable sync to prevent conflicts
+            was_syncing = getattr(self, 'sync_navigation', True)
+            if hasattr(self, 'sync_navigation'):
+                self.sync_navigation = False
+            
+            try:
+                for ax in self.axes:
+                    ax.set_xlim(new_xlim)
+                    ax.autoscale_view(scalex=False, scaley=True)  # Auto-scale Y only
+                
+                self.fig.canvas.draw_idle()
+                
+            finally:
+                if hasattr(self, 'sync_navigation'):
+                    self.sync_navigation = was_syncing
+            
+        except Exception as e:
+            logging.error(f"Failed to force auto-scroll: {e}")
+
+    def _handle_axis_scaling(self, plot_data):
+        """
+        ✅ PERFECT: Smart axis scaling with mouse-triggered manual mode
+        """
+        timestamps = plot_data['timestamps']
+        
+        if len(timestamps) == 0:
+            return
+        
+        for i, ax in enumerate(self.axes):
+            try:
+                current_xlim = ax.get_xlim()
+                
+                # Always update data ranges
+                ax.relim()
+                
+                # ✅ SMART BEHAVIOR: Auto-scroll unless in manual mode
+                if self.auto_scroll and not self.manual_mode and len(timestamps) > 10:
+                    # AUTO-SCROLL MODE: Follow latest data
+                    
+                    # Temporarily disable sync during auto-scroll
+                    was_syncing = getattr(self, 'sync_navigation', True)
+                    if hasattr(self, 'sync_navigation'):
+                        self.sync_navigation = False
+                    
+                    try:
+                        # Show latest data window
+                        if len(timestamps) > self.max_display_points:
+                            # Show most recent max_display_points
+                            display_start = len(timestamps) - self.max_display_points
+                            display_timestamps = timestamps[display_start:]
+                        else:
+                            display_timestamps = timestamps
+                        
+                        if len(display_timestamps) > 1:
+                            time_span = display_timestamps[-1] - display_timestamps[0]
+                            margin = time_span * 0.02  # 2% margin
+                            new_xlim = (display_timestamps[0] - margin, display_timestamps[-1] + margin)
+                            
+                            # Set new limits
+                            ax.set_xlim(new_xlim)
+                            
+                            # Store as "system set" limits (not user interaction)
+                            self._user_xlim_overrides[i] = new_xlim
+                        
+                        # Auto-scale Y axis
+                        ax.autoscale_view(scalex=False, scaley=True)
+                        
+                        # Update last auto-scroll time
+                        self._last_auto_scroll_time = time.time()
+                        
+                    finally:
+                        # Restore sync setting
+                        if hasattr(self, 'sync_navigation'):
+                            self.sync_navigation = was_syncing
+                            
+                else:
+                    # MANUAL MODE: Preserve user view, only auto-scale Y
+                    ax.autoscale_view(scalex=False, scaley=True)
+                    
+                    # Don't update stored xlim - keep user's view
+                    if i not in self._user_xlim_overrides:
+                        self._user_xlim_overrides[i] = current_xlim
+                
+                # ✅ ENHANCED: Smart Y-axis scaling for price chart
+                if i == 0 and len(plot_data['bid_prices']) > 0 and len(plot_data['ask_prices']) > 0:
+                    self._smart_price_y_scaling(ax, plot_data, ax.get_xlim())
+                    
+            except Exception as e:
+                logging.debug(f"Axis scaling warning for axis {i}: {e}")
+
+    def _user_modified_view(self, axis_index, current_xlim):
+        """✅ ENHANCED: Better detection with auto-scroll awareness"""
+        try:
+            if not hasattr(self, '_user_xlim_overrides'):
+                self._user_xlim_overrides = {}
+            
+            if axis_index not in self._user_xlim_overrides:
+                self._user_xlim_overrides[axis_index] = current_xlim
+                return False
+            
+            prev_xlim = self._user_xlim_overrides[axis_index]
+            
+            # More sensitive detection for manual interaction
+            tolerance = 1e-6  # Smaller tolerance for better detection
+            modified = (abs(current_xlim[0] - prev_xlim[0]) > tolerance or 
+                       abs(current_xlim[1] - prev_xlim[1]) > tolerance)
+            
+            # ✅ NEW: Only consider it "user modified" if we're not in auto-scroll mode
+            # This prevents auto-scroll updates from being detected as user interaction
+            if modified and self.auto_scroll and not self.manual_mode:
+                # Check if this was likely an auto-scroll update
+                current_time = time.time()
+                if current_time - self._last_auto_scroll_time < 0.5:  # Within 500ms of auto-scroll
+                    modified = False
+                else:
+                    # This was likely user interaction
+                    logging.debug(f"🔍 User interaction detected on axis {axis_index}")
+            
+            # Update stored limits
+            self._user_xlim_overrides[axis_index] = current_xlim
+            
+            return modified and self.auto_scroll  # Only flag as modified if auto-scroll is on
+            
+        except Exception as e:
+            logging.debug(f"User interaction detection failed: {e}")
+            return False
+
+    def get_auto_scroll_status(self):
+        """✅ NEW: Get current auto-scroll status"""
+        return {
+            'auto_scroll': self.auto_scroll,
+            'manual_mode': self.manual_mode,
+            'button_text': self.auto_scroll_button.label.get_text() if self.auto_scroll_button else 'N/A'
+        }
+
+    def set_auto_scroll(self, enabled):
+        """✅ NEW: Programmatically set auto-scroll state"""
+        try:
+            if self.auto_scroll != enabled:
+                self._toggle_auto_scroll(None)
+                logging.info(f"📜 Auto-scroll programmatically set to: {enabled}")
+        except Exception as e:
+            logging.error(f"Failed to set auto-scroll: {e}")
+
+    def force_auto_scroll_update(self):
+        """✅ NEW: Force an auto-scroll update (useful for external triggers)"""
+        try:
+            if self.auto_scroll and not self.manual_mode:
+                plot_data = self._get_plot_window()
+                self._force_auto_scroll_to_latest(plot_data)
+                self._last_auto_scroll_time = time.time()
+        except Exception as e:
+            logging.error(f"Failed to force auto-scroll update: {e}")
 
     def _setup_synchronized_navigation(self):
         """
@@ -569,70 +896,6 @@ class LivePlotManager:
         except Exception as e:
             logging.error(f"Manual sync failed: {e}")
 
-    def _handle_axis_scaling(self, plot_data):
-        """
-        ✅ ENHANCED: Smart scaling that respects synchronized navigation
-        """
-        timestamps = plot_data['timestamps']
-        
-        if len(timestamps) == 0:
-            return
-            
-        for i, ax in enumerate(self.axes):
-            try:
-                current_xlim = ax.get_xlim()
-                
-                # ✅ ENHANCED: Better user interaction detection
-                user_modified = self._user_modified_view(i, current_xlim)
-                
-                # Always update data ranges
-                ax.relim()
-                
-                if not user_modified and len(timestamps) > 10:
-                    # Auto-scale only if user hasn't manually interacted
-                    
-                    # ✅ CRITICAL: Disable sync during auto-scaling to prevent conflicts
-                    was_syncing = self.sync_navigation
-                    self.sync_navigation = False
-                    
-                    try:
-                        ax.autoscale_view()
-                        
-                        # Force latest data to appear on the right side
-                        if hasattr(timestamps[0], 'timestamp'):  # pandas Timestamp
-                            time_span = (timestamps[-1] - timestamps[0]).total_seconds()
-                            margin_seconds = time_span * 0.02
-                            new_xlim = (
-                                timestamps[0] - pd.Timedelta(seconds=margin_seconds), 
-                                timestamps[-1] + pd.Timedelta(seconds=margin_seconds)
-                            )
-                            ax.set_xlim(new_xlim)
-                        else:
-                            # Numeric timestamps
-                            time_span = timestamps[-1] - timestamps[0]
-                            margin = time_span * 0.02
-                            new_xlim = (timestamps[0] - margin, timestamps[-1] + margin)
-                            ax.set_xlim(new_xlim)
-                        
-                        # Store the auto-set limits
-                        self._user_xlim_overrides[i] = ax.get_xlim()
-                        
-                    finally:
-                        # Restore sync setting
-                        self.sync_navigation = was_syncing
-                        
-                else:
-                    # User has manually set view - only auto-scale Y axis
-                    ax.autoscale_view(scalex=False, scaley=True)
-                    self._user_xlim_overrides[i] = current_xlim
-                
-                # ✅ SPECIAL: Enhanced Y-axis scaling for price chart
-                if i == 0 and len(plot_data['bid_prices']) > 0 and len(plot_data['ask_prices']) > 0:
-                    self._smart_price_y_scaling(ax, plot_data, current_xlim)
-                    
-            except Exception as e:
-                logging.debug(f"Axis scaling warning for axis {i}: {e}")
-
     def _smart_price_y_scaling(self, ax, plot_data, xlim):
         """✅ ENHANCED: Smart Y-axis scaling for visible price range"""
         try:
@@ -664,46 +927,29 @@ class LivePlotManager:
         except Exception as e:
             logging.debug(f"Smart Y-scaling failed: {e}")
 
-    def _user_modified_view(self, axis_index, current_xlim):
-        """✅ ENHANCED: Better detection of user pan/zoom interactions"""
-        try:
-            if not hasattr(self, '_user_xlim_overrides'):
-                self._user_xlim_overrides = {}
-            
-            if axis_index not in self._user_xlim_overrides:
-                self._user_xlim_overrides[axis_index] = current_xlim
-                return False
-            
-            prev_xlim = self._user_xlim_overrides[axis_index]
-            
-            # More sensitive detection - consider floating point precision
-            tolerance = 1e-8
-            modified = (abs(current_xlim[0] - prev_xlim[0]) > tolerance or 
-                       abs(current_xlim[1] - prev_xlim[1]) > tolerance)
-            
-            # Update stored limits
-            self._user_xlim_overrides[axis_index] = current_xlim
-            
-            if modified:
-                logging.debug(f"🔍 User interaction detected on axis {axis_index}")
-            
-            return modified
-            
-        except Exception as e:
-            logging.debug(f"User interaction detection failed: {e}")
-            return False
-
     def _setup_keyboard_shortcuts(self):
-        """✅ BONUS: Setup keyboard shortcuts for sync control"""
+        """✅ PERFECT: Intuitive keyboard shortcuts"""
         try:
             def on_key_press(event):
                 if event.key == 's':  # 'S' key toggles sync
-                    self._toggle_sync(None)
-                elif event.key == 'r':  # 'R' key resets sync to price chart
-                    self.sync_all_axes_to_first()
+                    if hasattr(self, '_toggle_sync'):
+                        self._toggle_sync(None)
+                elif event.key == 'r':  # 'R' key resets and returns to auto-scroll
+                    self._reset_data(None)
+                elif event.key == 'a':  # 'A' key returns to auto-scroll
+                    if self.manual_mode:
+                        self.manual_mode = False
+                        self.auto_scroll = True
+                        self._reset_to_auto_scroll()
+                        if self.auto_scroll_button:
+                            self.auto_scroll_button.label.set_text('📜 Auto ON')
+                            self.auto_scroll_button.color = '#27ae60'
+                        logging.info("⌨️ Returned to auto-scroll via keyboard")
+                elif event.key == 'h':  # 'H' key goes to latest data
+                    self.force_auto_scroll_update()
             
             self.fig.canvas.mpl_connect('key_press_event', on_key_press)
-            logging.info("✅ Keyboard shortcuts enabled: 'S' = toggle sync, 'R' = reset sync")
+            logging.info("✅ Intuitive keyboard shortcuts: 'A'=auto-scroll, 'R'=reset, 'H'=home")
             
         except Exception as e:
             logging.error(f"Failed to setup keyboard shortcuts: {e}")
@@ -886,49 +1132,6 @@ class LivePlotManager:
             logging.info(f"🎨 Plot update #{self.update_count}: {data_points} points, "
                         f"{arrow_count} arrows, speed: {self.speed_multiplier:.1f}x")
 
-    def _handle_axis_scaling(self, plot_data):
-        """✅ SMART SCALING: With full DataManager history access"""
-        timestamps = plot_data['timestamps']
-        
-        if len(timestamps) == 0:
-            return
-            
-        for i, ax in enumerate(self.axes):
-            try:
-                current_xlim = ax.get_xlim()
-                
-                # Check if user manually panned/zoomed
-                if self._user_modified_view(i, current_xlim):
-                    # User control - only update Y axis
-                    ax.autoscale_view(scalex=False, scaley=True)
-                    
-                    # ✅ POWER FEATURE: Load more data if user panned back
-                    if self._needs_historical_data(current_xlim, timestamps):
-                        extended_data = self._get_extended_historical_data(current_xlim)
-                        if extended_data and len(extended_data['timestamps']) > len(timestamps):
-                            self._render_plot_elements(extended_data)
-                            logging.info(f"📈 Extended data loaded: {len(extended_data['timestamps'])} points")
-                else:
-                    # Auto-scale to show latest data
-                    ax.autoscale_view()
-                    self._ensure_latest_data_visible(ax, timestamps)
-                    
-            except Exception as e:
-                logging.debug(f"Axis scaling warning for axis {i}: {e}")
-
-    def _user_modified_view(self, axis_index, current_xlim):
-        """Detect if user manually panned/zoomed"""
-        if axis_index not in self._user_xlim_overrides:
-            self._user_xlim_overrides[axis_index] = current_xlim
-            return False
-        
-        prev_xlim = self._user_xlim_overrides[axis_index]
-        modified = (abs(current_xlim[0] - prev_xlim[0]) > 1e-6 or 
-                   abs(current_xlim[1] - prev_xlim[1]) > 1e-6)
-        
-        self._user_xlim_overrides[axis_index] = current_xlim
-        return modified
-
     def _needs_historical_data(self, xlim, timestamps):
         """Check if we need to load more historical data"""
         if len(timestamps) == 0:
@@ -1082,6 +1285,12 @@ class LivePlotManager:
             dm_size = self.data_manager.get_size()
             self.stats_text.set_text(f'📊 Plot Reset | DataManager: {dm_size} points preserved')
             self.update_count = 0
+            # ✅ ADD: Return to auto-scroll mode after reset
+            self.manual_mode = False
+            self.auto_scroll = True
+            if self.auto_scroll_button:
+                self.auto_scroll_button.label.set_text('📜 Auto ON')
+                self.auto_scroll_button.color = '#27ae60'
             
             self.fig.canvas.draw_idle()
             
