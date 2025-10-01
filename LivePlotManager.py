@@ -246,24 +246,7 @@ class LivePlotManager:
                                           fontsize=11, color='#2c3e50')
             self.speed_text = self.fig.text(0.76, 0.11, 'Speed: 1.0x', 
                                           fontsize=11, color='#2c3e50')
-            
-            # Instructions
-            instructions = [
-                "🎛️ Controls Guide:",
-                "• ⏸️▶️ Pause/Resume: Toggle real-time updates", 
-                "• ⏭️ Step: Process one data point when paused",
-                "• 🔄 Reset: Clear all data and restart",
-                "• 🎚️ Speed: 0.1x (slow) to 5.0x (fast)",
-                "• 📊 Buffer: Data points to keep in memory"
-            ]
-            
-            for i, instruction in enumerate(instructions):
-                color = '#2c3e50' if i == 0 else '#6c757d'
-                weight = 'bold' if i == 0 else 'normal'
-                size = 11 if i == 0 else 10
-                self.fig.text(0.12, 0.105 - i*0.012, instruction, 
-                            fontsize=size, alpha=0.9, color=color, fontweight=weight)
-            
+                        
         except Exception as e:
             logging.error(f"Error setting up controls: {e}")
     
