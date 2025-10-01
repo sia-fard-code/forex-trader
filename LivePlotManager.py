@@ -312,6 +312,7 @@ class LivePlotManager:
             self.axes[3].set_xlabel('Time', fontsize=11)
             
             # ✅ ADD: Setup synchronized navigation after axes creation
+            self._setup_keyboard_shortcuts()
             self._setup_synchronized_navigation()
             # Add overall title
             self.fig.suptitle('🚀 Live Forex Trading Dashboard - DataManager Integrated', 
@@ -928,28 +929,55 @@ class LivePlotManager:
             logging.debug(f"Smart Y-scaling failed: {e}")
 
     def _setup_keyboard_shortcuts(self):
-        """✅ PERFECT: Intuitive keyboard shortcuts"""
+        """✅ Setup keyboard shortcuts for enhanced control"""
         try:
             def on_key_press(event):
-                if event.key == 's':  # 'S' key toggles sync
-                    if hasattr(self, '_toggle_sync'):
-                        self._toggle_sync(None)
-                elif event.key == 'r':  # 'R' key resets and returns to auto-scroll
-                    self._reset_data(None)
-                elif event.key == 'a':  # 'A' key returns to auto-scroll
-                    if self.manual_mode:
-                        self.manual_mode = False
-                        self.auto_scroll = True
-                        self._reset_to_auto_scroll()
-                        if self.auto_scroll_button:
-                            self.auto_scroll_button.label.set_text('📜 Auto ON')
-                            self.auto_scroll_button.color = '#27ae60'
-                        logging.info("⌨️ Returned to auto-scroll via keyboard")
-                elif event.key == 'h':  # 'H' key goes to latest data
-                    self.force_auto_scroll_update()
+                """Handle keyboard shortcuts"""
+                try:
+                    if event.key == 's':  # 'S' key toggles sync
+                        if hasattr(self, '_toggle_sync') and hasattr(self, 'sync_navigation'):
+                            self._toggle_sync(None)
+                            logging.info("⌨️ Sync toggled via 'S' key")
+                            
+                    elif event.key == 'r':  # 'R' key resets to auto-scroll
+                        self._reset_data(None)
+                        logging.info("⌨️ Reset to auto-scroll via 'R' key")
+                        
+                    elif event.key == 'a':  # 'A' key returns to auto-scroll
+                        if hasattr(self, 'manual_mode') and self.manual_mode:
+                            self.manual_mode = False
+                            self.auto_scroll = True
+                            self._reset_to_auto_scroll()
+                            if self.auto_scroll_button:
+                                self.auto_scroll_button.label.set_text('📜 Auto ON')
+                                self.auto_scroll_button.color = '#27ae60'
+                                self.fig.canvas.draw_idle()
+                            logging.info("⌨️ Returned to auto-scroll via 'A' key")
+                            
+                    elif event.key == 'h':  # 'H' key goes to latest data
+                        if hasattr(self, 'force_auto_scroll_update'):
+                            self.force_auto_scroll_update()
+                            logging.info("⌨️ Jumped to latest data via 'H' key")
+                            
+                    elif event.key == 'p':  # 'P' key toggles pause/resume
+                        if hasattr(self, '_toggle_pause'):
+                            self._toggle_pause(None)
+                            logging.info("⌨️ Pause/Resume toggled via 'P' key")
+                            
+                    elif event.key == 'n':  # 'N' key for step (next)
+                        if hasattr(self, '_step_forward'):
+                            self._step_forward(None)
+                            logging.info("⌨️ Step forward via 'N' key")
+                            
+                except Exception as e:
+                    logging.error(f"Keyboard shortcut error for key '{event.key}': {e}")
             
+            # Connect the keyboard event
             self.fig.canvas.mpl_connect('key_press_event', on_key_press)
-            logging.info("✅ Intuitive keyboard shortcuts: 'A'=auto-scroll, 'R'=reset, 'H'=home")
+            
+            logging.info("✅ Keyboard shortcuts enabled:")
+            logging.info("   'S' = Toggle sync | 'A' = Auto-scroll | 'R' = Reset")
+            logging.info("   'H' = Home (latest) | 'P' = Pause/Resume | 'N' = Step")
             
         except Exception as e:
             logging.error(f"Failed to setup keyboard shortcuts: {e}")
