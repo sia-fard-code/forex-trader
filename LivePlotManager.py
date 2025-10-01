@@ -1006,68 +1006,6 @@ class LivePlotManager:
                 observer.on_plot_resume()
             except Exception as e:
                 logging.error(f"Observer resume notification failed: {e}")
-    
-    def _notify_step(self):
-        """Notify all observers of step event"""
-        for observer in self.control_observers:
-            try:
-                observer.on_plot_step()
-            except Exception as e:
-                logging.error(f"Observer step notification failed: {e}")
-    
-    # 🎯 UPDATE EXISTING METHODS TO NOTIFY OBSERVERS
-    def _toggle_pause(self, event):
-        """Enhanced pause toggle with observer notification"""
-        try:
-            self.is_paused = not self.is_paused
-            
-            if self.is_paused:
-                self._notify_pause()  # 🎯 Notify observers first
-                self.play_pause_button.label.set_text('▶️ Resume')
-                self.play_pause_button.color = '#45b7d1'
-                self.status_text.set_text('Status: ⏸️ Paused')
-                self.status_text.set_color('#e67e22')
-                if self.animation:
-                    self.animation.pause()
-                logging.info("📊 Plot paused - observers notified")
-            else:
-                self._notify_resume()  # 🎯 Notify observers first
-                self.play_pause_button.label.set_text('⏸️ Pause')
-                self.play_pause_button.color = '#ff6b6b'
-                self.status_text.set_text('Status: ▶️ Running')
-                self.status_text.set_color('#27ae60')
-                if self.animation:
-                    self.animation.resume()
-                logging.info("📊 Plot resumed - observers notified")
-            
-            self.fig.canvas.draw_idle()
-            
-        except Exception as e:
-            logging.error(f"Error toggling pause: {e}")
-    
-    def _step_forward(self, event):
-        """Enhanced step forward with observer notification"""
-        try:
-            # Auto-pause if not already paused
-            if not self.is_paused:
-                self._toggle_pause(event)
-            
-            self.step_requested = True
-            self.step_mode = True
-            self.status_text.set_text('Status: ⏭️ Step Mode')
-            self.status_text.set_color('#8e44ad')
-            
-            # 🎯 Notify observers of step request
-            self._notify_step()
-            
-            # Process one update for the plot itself
-            self._update_plot(None)
-            self.fig.canvas.draw_idle()
-            
-            logging.info("📊 Step forward - observers notified")
-            
-        except Exception as e:
-            logging.error(f"Error stepping forward: {e}")
 
 # Quick test functionality
 if __name__ == "__main__":
