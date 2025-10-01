@@ -28,6 +28,7 @@ class MarketProcessing:
         self.simulation_steps = self.config.get("simulation_steps", 200)
         self.num_simulations = self.config.get("num_simulations", 5000)
         self.profitability_factor = self.config.get("profitability_factor", 1.5)
+        self.simulated_vol_paths = []
 
     def process_tick(self, t):
         """

@@ -1,3 +1,5 @@
+import matplotlib
+matplotlib.use('macosx')  # or 'Qt5Agg' depending on your system
 import pandas as pd
 import numpy as np
 import logging
@@ -162,12 +164,12 @@ def main():
     # precompile_numba_functions()
 
     # Initialize the trading strategy
-    strategy = TradingStrategy(config)
-
+    strategy = TradingStrategy(config, enable_live_plot=True)
+    # strategy.debug_live_plot_animation()
     # ---------------------- Step 3: Run the Strategy ----------------------
     logging.info("Starting backtest...")
 
-    strategy.run_strategy(data)
+    strategy.run_strategy(data, live_plot_speed=30.0, live_plot_delay=0.05)
 
 
     # ---------------------- Step 4: Analyze Results ----------------------
@@ -214,8 +216,25 @@ def main():
     # logging.info(f"Final Equity: {equity_curve.iloc[-1]}")
     # logging.info(f"Total PnL: {pnl.sum()}")
 
+    if strategy.enable_live_plot:
+        print("\n🎨 Live plot is active!")
+        print("📊 Final Statistics:")
+        if hasattr(strategy, 'debug_tick_count'):
+            print(f"  - Total ticks processed: {strategy.debug_tick_count}")
+        
+        if strategy.live_plotter:
+            plot_stats = strategy.live_plotter.get_plot_stats()
+            print(f"  - Plot data points: {plot_stats.get('data_points', 0)}")
+            print(f"  - Current speed: {plot_stats.get('speed_multiplier', 1.0)}x")
+        
+        print("\n🎛️  Speed Controls:")
+        print("  - Normal speed: strategy.set_live_plot_speed(1.0)")
+        print("  - Fast: strategy.set_live_plot_speed(3.0)")
+        print("  - Slow: strategy.set_live_plot_speed(0.5)")
+        print("\nClose the plot window when done!")
+        plt.show(block=True)  # This keeps the plot alive until you close it        
     # ---------------------- Step 5: Plot Results (Optional) ----------------------
-    plot_results(data, equity_curve, positions_bid, positions_ask, refined_state)
+    # plot_results(data, equity_curve, positions_bid, positions_ask, refined_state)
 
 
     # plot_results(data, equity_curve, positions_bid, positions_ask, refined_state,pd.DataFrame(positions),pnl,balance)
