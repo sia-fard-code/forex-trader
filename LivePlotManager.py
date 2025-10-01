@@ -95,7 +95,11 @@ class LivePlotManager:
         self.status_text = None
         self.stats_text = None
         self.speed_text = None
-        
+
+        # ✅ ADD: Synchronized navigation setup
+        self.sync_navigation = True  # Enable/disable sync
+        self._navigation_callbacks = []
+        self._is_syncing = False  # Prevent infinite loops        
         # Debug counter
         self.update_count = 0
         
@@ -297,6 +301,8 @@ class LivePlotManager:
             
             self.axes[3].set_xlabel('Time', fontsize=11)
             
+            # ✅ ADD: Setup synchronized navigation after axes creation
+            self._setup_synchronized_navigation()
             # Add overall title
             self.fig.suptitle('🚀 Live Forex Trading Dashboard - DataManager Integrated', 
                              fontsize=18, fontweight='bold', y=0.98)
@@ -340,47 +346,56 @@ class LivePlotManager:
                 spine.set_linewidth(2)
             
             # Play/Pause Button
-            play_pause_ax = plt.axes([0.12, 0.16, 0.09, 0.05])
+            play_pause_ax = plt.axes([0.12, 0.16, 0.08, 0.05])  # Slightly smaller
             self.play_pause_button = Button(play_pause_ax, '▶️ Resume',
-                                          color='#45b7d1', hovercolor='#039be5')
+                                        color='#45b7d1', hovercolor='#039be5')
             self.play_pause_button.label.set_fontweight('bold')
             self.play_pause_button.on_clicked(self._toggle_pause)
             
             # Step Button
-            step_ax = plt.axes([0.23, 0.16, 0.09, 0.05])
+            step_ax = plt.axes([0.21, 0.16, 0.08, 0.05])
             self.step_button = Button(step_ax, '⏭️ Step', 
                                     color='#4ecdc4', hovercolor='#26a69a')
             self.step_button.label.set_fontweight('bold')
             self.step_button.on_clicked(self._step_forward)
             
-            # Reset/Clear Button
-            reset_ax = plt.axes([0.34, 0.16, 0.09, 0.05])
+            # Reset Button
+            reset_ax = plt.axes([0.30, 0.16, 0.08, 0.05])
             self.reset_button = Button(reset_ax, '🔄 Reset', 
-                                     color='#45b7d1', hovercolor='#039be5')
+                                    color='#45b7d1', hovercolor='#039be5')
             self.reset_button.label.set_fontweight('bold')
             self.reset_button.on_clicked(self._reset_data)
             
+            # ✅ NEW: Sync Button
+            sync_ax = plt.axes([0.39, 0.16, 0.08, 0.05])
+            self.sync_button = Button(sync_ax, '🔗 Sync ON', 
+                                    color='#27ae60', hovercolor='#2ecc71')
+            self.sync_button.label.set_fontweight('bold')
+            self.sync_button.on_clicked(self._toggle_sync)
+            
+            # ✅ ADJUSTED: Move sliders to accommodate sync button
             # Speed Control Slider
-            speed_ax = plt.axes([0.47, 0.17, 0.25, 0.03])
+            speed_ax = plt.axes([0.50, 0.17, 0.22, 0.03])  # Adjusted position
             self.speed_slider = Slider(speed_ax, 'Speed', 0.1, 5.0, 
-                                     valinit=1.0, valfmt='%.1fx', 
-                                     facecolor='#96ceb4', alpha=0.8)
+                                    valinit=1.0, valfmt='%.1fx', 
+                                    facecolor='#96ceb4', alpha=0.8)
             self.speed_slider.on_changed(self._update_speed)
             
             # Max Points Slider
-            points_ax = plt.axes([0.47, 0.12, 0.25, 0.03])
+            points_ax = plt.axes([0.50, 0.12, 0.22, 0.03])
             self.points_slider = Slider(points_ax, 'Buffer', 100, 2000, 
-                                      valinit=self.max_display_points, valfmt='%d pts',
-                                      facecolor='#f7dc6f', alpha=0.8)
+                                    valinit=self.max_display_points, valfmt='%d pts',
+                                    facecolor='#f7dc6f', alpha=0.8)
             self.points_slider.on_changed(self._update_max_points)
             
-            # Status Display
-            self.status_text = self.fig.text(0.76, 0.17, '⏸️ Paused - Click Resume to start', 
-                                           fontsize=12, fontweight='bold', color='#e67e22')
-            self.stats_text = self.fig.text(0.76, 0.14, 'DataManager: Ready | Arrows: 0', 
-                                          fontsize=11, color='#2c3e50')
-            self.speed_text = self.fig.text(0.76, 0.11, 'Speed: 1.0x', 
-                                          fontsize=11, color='#2c3e50')
+            # ✅ ADJUSTED: Status text positions
+            self.status_text = self.fig.text(0.75, 0.17, '⏸️ Paused - Click Resume to start', 
+                                        fontsize=12, fontweight='bold', color='#e67e22')
+            self.stats_text = self.fig.text(0.75, 0.14, 'DataManager: Ready | Arrows: 0', 
+                                        fontsize=11, color='#2c3e50')
+            self.speed_text = self.fig.text(0.75, 0.11, 'Speed: 1.0x', 
+                                        fontsize=11, color='#2c3e50')
+
                         
         except Exception as e:
             logging.error(f"Error setting up controls: {e}")
@@ -429,6 +444,270 @@ class LivePlotManager:
             import traceback
             traceback.print_exc()
 
+            # ✅ ADD: Setup synchronized navigation after axes creation
+            self._setup_synchronized_navigation()
+
+    def _setup_synchronized_navigation(self):
+        """
+        ✅ NEW: Setup synchronized pan/zoom across all subplots
+        """
+        try:
+            logging.info("🔗 Setting up synchronized navigation...")
+            
+            # Connect navigation events for each axis
+            for i, ax in enumerate(self.axes):
+                # Connect xlim change events
+                ax.callbacks.connect('xlim_changed', 
+                                   lambda axis, ax_index=i: self._on_xlim_changed(axis, ax_index))
+                
+                # Store original navigation toolbar functions
+                if not hasattr(self, '_original_nav_funcs'):
+                    self._original_nav_funcs = {}
+                
+                logging.debug(f"✅ Connected sync events for axis {i}")
+            
+            # Add sync toggle to controls
+            self._add_sync_controls()
+            
+        except Exception as e:
+            logging.error(f"Failed to setup synchronized navigation: {e}")
+
+    def _add_sync_controls(self):
+        """✅ ADD: Sync control toggle button"""
+        try:
+            # Add sync toggle button next to other controls
+            sync_ax = plt.axes([0.45, 0.16, 0.08, 0.05])
+            self.sync_button = Button(sync_ax, '🔗 Sync ON', 
+                                    color='#27ae60', hovercolor='#2ecc71')
+            self.sync_button.label.set_fontweight('bold')
+            self.sync_button.on_clicked(self._toggle_sync)
+            
+        except Exception as e:
+            logging.error(f"Failed to add sync controls: {e}")
+
+    def _toggle_sync(self, event):
+        """✅ Toggle synchronized navigation on/off"""
+        try:
+            self.sync_navigation = not self.sync_navigation
+            
+            if self.sync_navigation:
+                self.sync_button.label.set_text('🔗 Sync ON')
+                self.sync_button.color = '#27ae60'
+                logging.info("🔗 Synchronized navigation ENABLED")
+            else:
+                self.sync_button.label.set_text('🔗 Sync OFF')  
+                self.sync_button.color = '#95a5a6'
+                logging.info("🔗 Synchronized navigation DISABLED")
+            
+            self.fig.canvas.draw_idle()
+            
+        except Exception as e:
+            logging.error(f"Failed to toggle sync: {e}")
+
+    def _on_xlim_changed(self, ax, ax_index):
+        """
+        ✅ CORE SYNC LOGIC: Handle X-axis limit changes and sync to other plots
+        """
+        try:
+            # Prevent infinite recursion during sync operations
+            if self._is_syncing or not self.sync_navigation:
+                return
+            
+            # Get the new x-limits from the changed axis
+            new_xlim = ax.get_xlim()
+            
+            logging.debug(f"🔗 Axis {ax_index} xlim changed to: {new_xlim}")
+            
+            # Set syncing flag to prevent recursion
+            self._is_syncing = True
+            
+            try:
+                # Sync x-limits to all other axes
+                for i, other_ax in enumerate(self.axes):
+                    if i != ax_index:  # Don't sync to self
+                        current_xlim = other_ax.get_xlim()
+                        
+                        # Only update if limits are actually different
+                        if (abs(current_xlim[0] - new_xlim[0]) > 1e-10 or 
+                            abs(current_xlim[1] - new_xlim[1]) > 1e-10):
+                            
+                            other_ax.set_xlim(new_xlim)
+                            logging.debug(f"  ↳ Synced to axis {i}")
+                
+                # Trigger canvas redraw
+                self.fig.canvas.draw_idle()
+                
+            finally:
+                # Always reset syncing flag
+                self._is_syncing = False
+            
+        except Exception as e:
+            logging.error(f"Failed to sync xlim changes: {e}")
+            self._is_syncing = False
+
+    def sync_all_axes_to_first(self):
+        """✅ UTILITY: Manually sync all axes to the first axis (price chart)"""
+        try:
+            if not self.axes or len(self.axes) == 0:
+                return
+                
+            reference_xlim = self.axes[0].get_xlim()
+            
+            self._is_syncing = True
+            try:
+                for i, ax in enumerate(self.axes[1:], 1):
+                    ax.set_xlim(reference_xlim)
+                    logging.debug(f"✅ Manually synced axis {i} to reference")
+                
+                self.fig.canvas.draw_idle()
+                
+            finally:
+                self._is_syncing = False
+                
+            logging.info(f"🔗 All axes manually synced to: {reference_xlim}")
+            
+        except Exception as e:
+            logging.error(f"Manual sync failed: {e}")
+
+    def _handle_axis_scaling(self, plot_data):
+        """
+        ✅ ENHANCED: Smart scaling that respects synchronized navigation
+        """
+        timestamps = plot_data['timestamps']
+        
+        if len(timestamps) == 0:
+            return
+            
+        for i, ax in enumerate(self.axes):
+            try:
+                current_xlim = ax.get_xlim()
+                
+                # ✅ ENHANCED: Better user interaction detection
+                user_modified = self._user_modified_view(i, current_xlim)
+                
+                # Always update data ranges
+                ax.relim()
+                
+                if not user_modified and len(timestamps) > 10:
+                    # Auto-scale only if user hasn't manually interacted
+                    
+                    # ✅ CRITICAL: Disable sync during auto-scaling to prevent conflicts
+                    was_syncing = self.sync_navigation
+                    self.sync_navigation = False
+                    
+                    try:
+                        ax.autoscale_view()
+                        
+                        # Force latest data to appear on the right side
+                        if hasattr(timestamps[0], 'timestamp'):  # pandas Timestamp
+                            time_span = (timestamps[-1] - timestamps[0]).total_seconds()
+                            margin_seconds = time_span * 0.02
+                            new_xlim = (
+                                timestamps[0] - pd.Timedelta(seconds=margin_seconds), 
+                                timestamps[-1] + pd.Timedelta(seconds=margin_seconds)
+                            )
+                            ax.set_xlim(new_xlim)
+                        else:
+                            # Numeric timestamps
+                            time_span = timestamps[-1] - timestamps[0]
+                            margin = time_span * 0.02
+                            new_xlim = (timestamps[0] - margin, timestamps[-1] + margin)
+                            ax.set_xlim(new_xlim)
+                        
+                        # Store the auto-set limits
+                        self._user_xlim_overrides[i] = ax.get_xlim()
+                        
+                    finally:
+                        # Restore sync setting
+                        self.sync_navigation = was_syncing
+                        
+                else:
+                    # User has manually set view - only auto-scale Y axis
+                    ax.autoscale_view(scalex=False, scaley=True)
+                    self._user_xlim_overrides[i] = current_xlim
+                
+                # ✅ SPECIAL: Enhanced Y-axis scaling for price chart
+                if i == 0 and len(plot_data['bid_prices']) > 0 and len(plot_data['ask_prices']) > 0:
+                    self._smart_price_y_scaling(ax, plot_data, current_xlim)
+                    
+            except Exception as e:
+                logging.debug(f"Axis scaling warning for axis {i}: {e}")
+
+    def _smart_price_y_scaling(self, ax, plot_data, xlim):
+        """✅ ENHANCED: Smart Y-axis scaling for visible price range"""
+        try:
+            timestamps = plot_data['timestamps']
+            bid_prices = plot_data['bid_prices']
+            ask_prices = plot_data['ask_prices']
+            
+            if len(timestamps) == 0 or len(bid_prices) == 0:
+                return
+            
+            # Find data points within current x-axis range
+            if len(timestamps) > 1:
+                mask = (timestamps >= xlim[0]) & (timestamps <= xlim[1])
+                
+                if np.any(mask):
+                    visible_bids = bid_prices[mask]
+                    visible_asks = ask_prices[mask]
+                    
+                    if len(visible_bids) > 0 and len(visible_asks) > 0:
+                        y_min = min(np.min(visible_bids), np.min(visible_asks))
+                        y_max = max(np.max(visible_bids), np.max(visible_asks))
+                        y_range = y_max - y_min
+                        
+                        if y_range > 0:
+                            margin_y = y_range * 0.05  # 5% margin
+                            ax.set_ylim(y_min - margin_y, y_max + margin_y)
+                            logging.debug(f"✅ Smart Y-scaling: {y_min:.5f} to {y_max:.5f}")
+            
+        except Exception as e:
+            logging.debug(f"Smart Y-scaling failed: {e}")
+
+    def _user_modified_view(self, axis_index, current_xlim):
+        """✅ ENHANCED: Better detection of user pan/zoom interactions"""
+        try:
+            if not hasattr(self, '_user_xlim_overrides'):
+                self._user_xlim_overrides = {}
+            
+            if axis_index not in self._user_xlim_overrides:
+                self._user_xlim_overrides[axis_index] = current_xlim
+                return False
+            
+            prev_xlim = self._user_xlim_overrides[axis_index]
+            
+            # More sensitive detection - consider floating point precision
+            tolerance = 1e-8
+            modified = (abs(current_xlim[0] - prev_xlim[0]) > tolerance or 
+                       abs(current_xlim[1] - prev_xlim[1]) > tolerance)
+            
+            # Update stored limits
+            self._user_xlim_overrides[axis_index] = current_xlim
+            
+            if modified:
+                logging.debug(f"🔍 User interaction detected on axis {axis_index}")
+            
+            return modified
+            
+        except Exception as e:
+            logging.debug(f"User interaction detection failed: {e}")
+            return False
+
+    def _setup_keyboard_shortcuts(self):
+        """✅ BONUS: Setup keyboard shortcuts for sync control"""
+        try:
+            def on_key_press(event):
+                if event.key == 's':  # 'S' key toggles sync
+                    self._toggle_sync(None)
+                elif event.key == 'r':  # 'R' key resets sync to price chart
+                    self.sync_all_axes_to_first()
+            
+            self.fig.canvas.mpl_connect('key_press_event', on_key_press)
+            logging.info("✅ Keyboard shortcuts enabled: 'S' = toggle sync, 'R' = reset sync")
+            
+        except Exception as e:
+            logging.error(f"Failed to setup keyboard shortcuts: {e}")
+            
     def _render_plot_elements(self, plot_data):
         """✅ FIXED: Enhanced rendering with detailed debugging"""
         timestamps = plot_data['timestamps']
