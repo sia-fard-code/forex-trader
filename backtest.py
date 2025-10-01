@@ -1,5 +1,5 @@
-import matplotlib
-matplotlib.use('macosx')  # or 'Qt5Agg' depending on your system
+# import matplotlib
+# matplotlib.use('macosx')  # or 'Qt5Agg' depending on your system
 import pandas as pd
 import numpy as np
 import logging

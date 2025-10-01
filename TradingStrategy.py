@@ -34,6 +34,8 @@ class TradingStrategy:
         # 🎯 INITIALIZE THREADING EVENTS FIRST
         self.processing_event = threading.Event()
         self.step_event = threading.Event()
+        self.shutdown_requested = threading.Event()
+        self.processing_complete = threading.Event()
         # self.processing_event.set()  # Start unpaused
         # Plot control flags
         self.plot_initialized = False
@@ -161,6 +163,23 @@ class TradingStrategy:
         self.processing_event.set()  # Unblock processing
         logging.info("▶️ STRATEGY RESUMED by plot control")
 
+    def on_plot_close(self):
+        """Handle plot window close - shutdown gracefully"""
+        logging.info("🚪 Plot closed - initiating graceful shutdown")
+        
+        # Signal shutdown
+        self.shutdown_requested.set()
+        
+        # Unblock any waiting processes
+        self.processing_event.set()  # Unblock processing
+        self.step_event.set()        # Unblock step if waiting
+        
+        print("\n" + "="*50)
+        print("🚪 PLOT WINDOW CLOSED")
+        print("🛑 Shutting down strategy...")
+        print("⏳ Please wait for cleanup to complete")
+        print("="*50)
+        
     def on_plot_step(self):
         """Simple step fix - unblock processing temporarily"""
         self.step_event.set()          # Mark as step mode
@@ -189,38 +208,135 @@ class TradingStrategy:
         # 🎯 START PROCESSING IN SEPARATE THREAD
         import threading
         
+        # 🎯 START PROCESSING IN SEPARATE THREAD WITH SHUTDOWN HANDLING
         def processing_thread():
-            """Run processing in separate thread"""
+            """Run processing with shutdown monitoring"""
             try:
-                self._run_controlled_processing(data)
+                self._run_controlled_processing_with_shutdown(data)
             except Exception as e:
                 logging.error(f"Processing thread error: {e}")
+            finally:
+                self.processing_complete.set()  # Signal completion
+                logging.info("🔄 Processing thread completed")
         
         # Start processing thread
         process_thread = threading.Thread(target=processing_thread, daemon=True)
         process_thread.start()
         
-        # 🎯 KEEP MAIN THREAD FOR MATPLOTLIB
+        # 🎯 MAIN THREAD HANDLES PLOT WITH SHUTDOWN MONITORING
         if self.enable_live_plot:
             print("\n" + "="*60)
             print("🎬 FOREX TRADING STRATEGY INITIALIZED")
             print("⏸️ Strategy is PAUSED and ready")
             print("🎨 Live plot window is open")
             print("👆 Click the ▶️ RESUME button to start processing")
+            print("🚪 Close the plot window to shutdown")
             print("="*60)
             
-            # Keep main thread alive for matplotlib
+            # Keep main thread alive for matplotlib with shutdown monitoring
             try:
                 import matplotlib.pyplot as plt
-                plt.show(block=True)  # This keeps main thread for matplotlib
+                
+                # Check for shutdown while keeping plot alive
+                while not self.shutdown_requested.is_set():
+                    plt.pause(0.1)  # Small pause to keep plot responsive
+                    
+                    # Check if processing is complete
+                    if self.processing_complete.is_set():
+                        logging.info("✅ Processing completed normally")
+                        break
+                
+                # Clean shutdown
+                logging.info("🧹 Starting cleanup...")
+                plt.close('all')  # Close all matplotlib windows
+                
             except KeyboardInterrupt:
                 logging.info("🛑 User interrupted with Ctrl+C")
+                self.shutdown_requested.set()
             except Exception as e:
                 logging.error(f"Matplotlib error: {e}")
         
-        # Wait for processing to complete
-        process_thread.join()
-        logging.info("🎉 Strategy completed")
+        # Wait for processing thread to complete (with timeout)
+        logging.info("⏳ Waiting for processing thread to finish...")
+        process_thread.join(timeout=5.0)
+        
+        if process_thread.is_alive():
+            logging.warning("⚠️ Processing thread didn't finish cleanly")
+        else:
+            logging.info("✅ Processing thread finished cleanly")
+        
+        logging.info("🎉 Strategy shutdown complete")
+        
+    def _run_controlled_processing_with_shutdown(self, data):
+        """Processing loop with shutdown monitoring"""
+        
+        logging.info("🎯 Starting controlled processing with shutdown monitoring...")
+        
+        for idx, row in data.iterrows():
+            # 🎯 CHECK FOR SHUTDOWN REQUEST
+            if self.shutdown_requested.is_set():
+                logging.info("🛑 Shutdown requested - stopping processing")
+                break
+            
+            print(f"🔍 DEBUG: Processing tick {idx}")
+            
+            # 🎯 WAIT FOR PROCESSING OR SHUTDOWN
+            while not self.shutdown_requested.is_set():
+                if self.processing_event.is_set():
+                    # Normal processing
+                    break
+                elif self.step_event.is_set():
+                    # Step mode
+                    break
+                else:
+                    # Paused - wait briefly then check again
+                    time.sleep(0.1)
+                    continue
+            
+            # Check shutdown again after waiting
+            if self.shutdown_requested.is_set():
+                logging.info("🛑 Shutdown during wait - stopping processing")
+                break
+            
+            # Extract and process tick
+            tick_id = row["tick_id"]
+            bid = row["bid"] 
+            ask = row["ask"]
+            tick_timestamp = pd.to_datetime(row["timestamp"])
+            phase = "training" if idx < self.training_window else "live"
+            
+            # Process tick
+            self.process_tick(idx, bid, ask, tick_id, tick_timestamp)
+            
+            # Update plot (check if still open)
+            if self.plot_initialized and not self.shutdown_requested.is_set():
+                self._update_plot_direct(bid, ask, tick_timestamp, tick_id)
+                self._update_plot_stats(phase)
+            
+            # Handle step mode
+            if self.step_event.is_set():
+                self.step_event.clear()
+                self.processing_event.clear()
+                
+                if not self.shutdown_requested.is_set():
+                    print(f"📍 STEP COMPLETED: Tick {tick_id} ({phase})")
+                    print("   👆 Click Step again or Resume to continue")
+            
+            # Progress logging
+            if idx % 100 == 0 and not self.shutdown_requested.is_set():
+                progress = idx / len(data) * 100
+                logging.info(f"🎯 Progress: {progress:.1f}% - Tick {tick_id} ({phase})")
+            
+            # Small delay (but check shutdown)
+            for _ in range(int(self.live_plot_delay * 100)):  # Split delay into small chunks
+                if self.shutdown_requested.is_set():
+                    break
+                time.sleep(0.01)
+        
+        if self.shutdown_requested.is_set():
+            logging.info("🛑 Processing stopped due to shutdown request")
+        else:
+            logging.info("✅ Processing completed normally")
 
     def _initialize_plot_properly(self):
         """Proper plot initialization for main thread"""

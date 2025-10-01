@@ -16,7 +16,10 @@ class PlotControlObserver(ABC):
     def on_plot_step(self):
         """Called when step button is clicked"""
         pass
-
+    @abstractmethod
+    def on_plot_close(self):  # 🎯 NEW: Handle plot close
+        """Called when plot window is closed"""
+        pass
 
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
@@ -72,7 +75,9 @@ class LivePlotManager:
         # Thread-safe queues
         self.data_queue = Queue()
         self.arrows_queue = Queue()
-        
+        # 🎯 ADD SHUTDOWN HANDLING
+        self.is_closing = False
+        self.close_callbacks = []        
         # Plot elements
         self.fig = None
         self.axes = None
@@ -161,10 +166,15 @@ class LivePlotManager:
             self._setup_controls()
             
             # Initialize animation
-            self.animation = animation.FuncAnimation(
-                self.fig, self._update_plot, interval=self.update_interval, 
-                blit=False, cache_frame_data=False, repeat=True
-            )
+            try:
+                self.animation = animation.FuncAnimation(
+                    self.fig, self._update_plot, interval=self.update_interval, 
+                    blit=False, cache_frame_data=False, repeat=True
+                )
+                logging.info("✅ Animation initialized successfully")
+            except Exception as e:
+                logging.warning(f"⚠️ Animation initialization failed: {e}")
+                self.animation = None  # Set to None if failed
             
             # Event connections
             self.fig.canvas.mpl_connect('resize_event', self._on_resize)
@@ -210,20 +220,6 @@ class LivePlotManager:
                                      color='#45b7d1', hovercolor='#039be5')
             self.reset_button.label.set_fontweight('bold')
             self.reset_button.on_clicked(self._reset_data)
-
-            # Add Auto-Scale Toggle Button
-            auto_scale_ax = plt.axes([0.76, 0.12, 0.08, 0.04])
-            self.auto_scale_button = Button(auto_scale_ax, '🔄 Auto', 
-                                        color='#95a5a6', hovercolor='#7f8c8d')
-            self.auto_scale_button.label.set_fontweight('bold')
-            self.auto_scale_button.on_clicked(self._toggle_auto_scale)
-            
-            # Add Reset View Button  
-            reset_view_ax = plt.axes([0.76, 0.07, 0.08, 0.04])
-            self.reset_view_button = Button(reset_view_ax, '🏠 Home', 
-                                        color='#3498db', hovercolor='#2980b9')
-            self.reset_view_button.label.set_fontweight('bold')
-            self.reset_view_button.on_clicked(self._reset_view)
             
             # Auto-scale state
             self.auto_scale_enabled = True
@@ -271,50 +267,6 @@ class LivePlotManager:
         except Exception as e:
             logging.error(f"Error setting up controls: {e}")
     
-    def _toggle_auto_scale(self, event):
-        """Toggle auto-scaling on/off"""
-        try:
-            self.auto_scale_enabled = not self.auto_scale_enabled
-            
-            if self.auto_scale_enabled:
-                self.auto_scale_button.label.set_text('🔄 Auto')
-                self.auto_scale_button.color = '#95a5a6'
-                # Reset user overrides to re-enable auto-scaling
-                if hasattr(self, '_user_xlim_overrides'):
-                    self._user_xlim_overrides.clear()
-                logging.info("📊 Auto-scaling enabled")
-            else:
-                self.auto_scale_button.label.set_text('📌 Manual') 
-                self.auto_scale_button.color = '#e74c3c'
-                logging.info("📊 Auto-scaling disabled - manual zoom/pan active")
-            
-            self.fig.canvas.draw_idle()
-            
-        except Exception as e:
-            logging.error(f"Error toggling auto-scale: {e}")
-
-    def _reset_view(self, event):
-        """Reset view to show all data"""
-        try:
-            if hasattr(self, '_user_xlim_overrides'):
-                self._user_xlim_overrides.clear()
-            
-            # Force auto-scale on all axes
-            for ax in self.axes:
-                ax.relim()
-                ax.autoscale()
-            
-            self.auto_scale_enabled = True
-            self.auto_scale_button.label.set_text('🔄 Auto')
-            self.auto_scale_button.color = '#95a5a6'
-            
-            self.fig.canvas.draw_idle()
-            
-            logging.info("🏠 View reset to show all data")
-            
-        except Exception as e:
-            logging.error(f"Error resetting view: {e}")
-
     def _toggle_pause(self, event):
         """Toggle pause/resume (starts paused by default)"""
         try:
@@ -509,15 +461,49 @@ class LivePlotManager:
         except:
             pass
     
-    def _on_close(self, event):
-        """Handle window close"""
+    def _cleanup_animation(self):
+        """Safely cleanup animation resources"""
         try:
-            if self.animation:
-                self.animation.event_source.stop()
-            logging.info("Plot window closed")
-        except:
-            pass
-    
+            if hasattr(self, 'animation'):
+                if self.animation is not None:
+                    if hasattr(self.animation, 'event_source'):
+                        if self.animation.event_source is not None:
+                            self.animation.event_source.stop()
+                            logging.info("✅ Animation event source stopped")
+                        else:
+                            logging.info("ℹ️ Animation event source was None")
+                    else:
+                        logging.info("ℹ️ Animation has no event_source")
+                    self.animation = None
+                else:
+                    logging.info("ℹ️ Animation was already None")
+            else:
+                logging.info("ℹ️ No animation attribute found")
+        except Exception as e:
+            logging.warning(f"⚠️ Error during animation cleanup: {e}")
+
+    def _on_close(self, event):
+        """Handle plot window close event with robust cleanup"""
+        try:
+            logging.info("🚪 Plot window closing - starting cleanup")
+            self.is_closing = True
+            
+            # Notify observers
+            for observer in self.control_observers:
+                try:
+                    if hasattr(observer, 'on_plot_close'):
+                        observer.on_plot_close()
+                except Exception as e:
+                    logging.error(f"Observer close notification failed: {e}")
+            
+            # 🎯 SAFE ANIMATION CLEANUP
+            self._cleanup_animation()
+            
+            logging.info("✅ Plot cleanup completed successfully")
+            
+        except Exception as e:
+            logging.error(f"Error during plot close: {e}")
+
     def add_trade_arrow(self, open_time, close_time, open_price, close_price, 
                        direction, trade_id=None, pnl=None):
         """
