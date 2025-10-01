@@ -1,5 +1,7 @@
 # import matplotlib
 # matplotlib.use('Qt5Agg')  # or 'Qt5Agg' depending on your system
+import threading
+import time
 import pandas as pd
 import numpy as np
 import logging
@@ -112,7 +114,28 @@ def parse_arguments():
         default=1000,
         help='Maximum data points to display in live plot.'
     )
+     # ✅ ENHANCED: Auto-start option
+    parser.add_argument(
+        '--auto_start',
+        action='store_true',
+        default=False,
+        help='Automatically start processing without waiting for Resume button.'
+    )
     
+    # ✅ ENHANCED: Training modes automatically set auto_start
+    parser.add_argument(
+        '--training_only',
+        action='store_true',
+        default=False,
+        help='Training-only mode (implies --auto_start).'
+    )
+    
+    parser.add_argument(
+        '--delay_plot_until_trained', 
+        action='store_true',
+        default=False,
+        help='Delay plot until training complete (implies --auto_start).'
+    )
     return parser.parse_args()
 
 def main():
@@ -127,7 +150,14 @@ def main():
     enable_live_plot = args.enable_plot
     plot_speed = args.plot_speed
     plot_buffer = args.plot_buffer
+    training_only = args.training_only
+    delay_plot = args.delay_plot_until_trained
+    # ✅ SMART: Training modes imply auto_start
+    auto_start = args.auto_start or args.training_only or args.delay_plot_until_trained
     
+    if auto_start:
+        logging.info("🚀 AUTO-START mode enabled - processing will begin immediately")
+        
     filename = 'EURUSD_mt5_ticks-m.csv'
 
     # ---------------------- Step 1: Load and Preprocess Data ----------------------
@@ -141,7 +171,16 @@ def main():
     except Exception as e:
         logging.error(f"❌ Error reading {filename}: {e}")
         return
-
+    # ✅ SMART: Conditionally enable live plot
+    if training_only:
+        enable_live_plot = False  # No plot during training
+        logging.info("🏃 TRAINING-ONLY MODE: Live plot disabled for maximum speed")
+    elif delay_plot:
+        enable_live_plot = True   # Will be controlled by strategy
+        logging.info("⏳ DELAYED PLOT MODE: Plot will start after training")
+    else:
+        enable_live_plot = args.enable_plot  # Normal mode
+ 
     # ✅ ENHANCED: Data preprocessing with validation
     logging.info(f"📊 Processing data slice: {start_points} to {start_points+total_points}")
     data = data.iloc[start_points:start_points+total_points].reset_index(drop=True)
@@ -211,24 +250,27 @@ def main():
 
     # ---------------------- Step 3: Initialize Enhanced Strategy ----------------------
     logging.info("🚀 Initializing enhanced TradingStrategy with DataManager integration...")
-    
-    try:
-        strategy = TradingStrategy(config, enable_live_plot=enable_live_plot)
+
+    if training_only:
+        logging.info("🏃 TRAINING-ONLY MODE: Processing until training completes")
         
-        # ✅ ENHANCED: Configure live plot settings
-        if enable_live_plot and hasattr(strategy, 'live_plotter'):
-            # Set initial plot parameters
-            if hasattr(strategy.live_plotter, 'max_display_points'):
-                strategy.live_plotter.max_display_points = plot_buffer
+        # Initialize strategy for training-only
+        strategy = TradingStrategy(config, enable_live_plot=False)
+        strategy.training_only_mode = True
+        
+        # Process data (will stop after training)
+        processed_count = strategy._run_headless_training(data)
+        
+        # Show results summary
+        results = strategy.get_results()
+        _show_training_results_summary(results, strategy, processed_count, len(data))
+        _continue_live_processing(strategy, data, processed_count)
             
-            logging.info(f"🎨 Live plot configured:")
-            logging.info(f"   📊 Buffer size: {plot_buffer} points")
-            logging.info(f"   ⚡ Speed: {plot_speed}x")
-            logging.info(f"   💾 DataManager buffer: {config['buffer_size']} points")
-        
-    except Exception as e:
-        logging.error(f"❌ Strategy initialization failed: {e}")
-        return
+    else:
+        # Normal processing modes
+        enable_live_plot = args.enable_plot
+        strategy = TradingStrategy(config, enable_live_plot=enable_live_plot)
+        strategy.run_strategy(data, live_plot_speed=args.plot_speed)
 
     # ---------------------- Step 4: Run Enhanced Strategy ----------------------
     logging.info("🎬 Starting enhanced backtest with DataManager integration...")
@@ -239,6 +281,11 @@ def main():
     print("🎨 Live Plot with Full History Access")
     print("📊 Real-time Statistics and Controls")
     print("="*80)
+    # ✅ NEW: Set training mode if needed
+    if training_only or delay_plot:
+        strategy.training_only_mode = training_only
+        strategy.delay_plot_mode = delay_plot
+    strategy.auto_start_mode = auto_start
 
     try:
         # ✅ ENHANCED: Run strategy with DataManager coordination
@@ -388,8 +435,6 @@ def debug_datamanager_integration():
     print("  ✅ Full history access for analysis")
     print("🚀 Integration ready for production!")
 
-if __name__ == "__main__":
-    main()
 
 def plot_results(data, equity_curve, positions_bid, positions_ask, refined_state):
     """
@@ -544,3 +589,151 @@ def plot_results(data, equity_curve, positions_bid, positions_ask, refined_state
     print(f"Debug: Bearish ticks: {num_bearish}")
 
     plt.show()
+
+def _show_training_results_summary(results, strategy, processed_count, total_count):
+    """✅ ENHANCED: Show training-only results summary"""
+    try:
+        dm_size = results.get("datamanager_total_size", 0)
+        training_count = results.get("training_tick_count", 0)
+        live_count = results.get("post_training_tick_count", 0)
+        approved = results.get("approved_trades", 0)
+        rejected = results.get("rejected_trades", 0)
+        
+        print(f"\n{'='*60}")
+        print(f"📊 TRAINING-ONLY RESULTS SUMMARY")
+        print(f"{'='*60}")
+        print(f"🎯 Training target: {training_count:,} ticks")
+        print(f"✅ Actually processed: {processed_count:,} ticks")
+        print(f"📈 Total available: {total_count:,} ticks")
+        print(f"📊 DataManager size: {dm_size:,} points")
+        print(f"✅ Approved signals: {approved:,}")
+        print(f"❌ Rejected signals: {rejected:,}")
+        
+        # Show completion percentage
+        completion = (processed_count / total_count) * 100 if total_count > 0 else 0
+        print(f"📈 Dataset completion: {completion:.1f}%")
+        
+        # Show final equity if available
+        equity_curve = results.get("equity_curve")
+        if equity_curve is not None and len(equity_curve) > 0:
+            final_equity = equity_curve[-1]
+            initial_equity = strategy.config['broker_config']['initial_capital']
+            total_return = ((final_equity - initial_equity) / initial_equity) * 100
+            print(f"💰 Final equity: ${final_equity:.2f}")
+            print(f"📈 Total return: {total_return:.2f}%")
+        
+        print(f"{'='*60}")
+        
+    except Exception as e:
+        logging.error(f"Results summary failed: {e}")
+
+def _show_post_training_plot(strategy, processed_count):
+    """✅ ENHANCED: Show post-training plot with actual data processed"""
+    try:
+        logging.info("🎨 Initializing post-training interactive plot...")
+        
+        from LivePlotManager import LivePlotManager
+        
+        # Create plot with all processed data
+        dm_size = strategy.data_manager.get_size()
+        plot_manager = LivePlotManager(
+            data_manager=strategy.data_manager,
+            max_display_points=dm_size,  # All processed data
+            start_paused=True  # Start paused for analysis
+        )
+        
+        # Add observer
+        plot_manager.add_control_observer(strategy)
+
+        print(f"\n🎨 Interactive plot initialized!")
+        print(f"📊 Displaying {dm_size:,} data points from training")
+        print(f"🎛️ Plot starts paused - use controls to explore data")
+        print(f"🔍 Pan/zoom to analyze training results")
+        print(f"🚪 Close plot window when finished")
+        
+        # Show the plot
+        plot_manager.show()
+        plt.show(block=True)  # Keep alive until user closes
+        
+        logging.info("✅ Post-training plot session completed")
+        
+    except Exception as e:
+        logging.error(f"❌ Post-training plot failed: {e}")
+        print("❌ Failed to show plot. Check logs for details.")
+
+def _continue_live_processing(strategy, data, processed_count):
+    """✅ NEW: Continue processing remaining data with live plot"""
+    try:
+        logging.info("▶️ Continuing live processing from where training left off...")
+        
+        # Reset shutdown flag to continue
+        strategy.shutdown_requested.clear()
+        
+        # Initialize live plot
+        from LivePlotManager import LivePlotManager
+        dm_size = strategy.data_manager.get_size()
+        live_plotter = LivePlotManager(
+            data_manager=strategy.data_manager,
+            max_display_points=dm_size,
+            start_paused=False  # Start running
+        )
+        
+        strategy.live_plotter = live_plotter
+        strategy.enable_live_plot = True
+        strategy.plot_initialized = True
+        live_plotter.add_control_observer(strategy)
+        
+        print(f"\n▶️ LIVE PROCESSING MODE")
+        print(f"📊 Will process remaining {len(data) - processed_count:,} ticks")
+        print(f"🎨 Live plot active - you can pause/resume/control")
+        print(f"🚪 Close plot window to stop")
+        
+        # Continue processing remaining data
+        _continue_processing_from_index(strategy, data, processed_count)
+        
+    except Exception as e:
+        logging.error(f"❌ Live processing continuation failed: {e}")
+
+def _continue_processing_from_index(strategy, data, start_idx):
+    """✅ NEW: Continue processing from specific index"""
+    try:
+        # Show the live plot
+        strategy.live_plotter.show()
+        
+        # Start processing thread for remaining data
+        def continue_processing():
+            logging.info(f"📊 Processing remaining data from index {start_idx}...")
+            
+            for idx in range(start_idx, len(data)):
+                if strategy.shutdown_requested.is_set():
+                    break
+                    
+                row = data.iloc[idx]
+                tick_id = row["tick_id"]
+                bid = row["bid"]
+                ask = row["ask"]
+                tick_timestamp = pd.to_datetime(row["timestamp"])
+                
+                # Process with live plot speed control
+                strategy.process_tick(idx, bid, ask, tick_id, tick_timestamp)
+                
+                # Small delay for live plotting
+                time.sleep(0.01)
+                
+                if idx % 500 == 0:
+                    progress = ((idx - start_idx) / (len(data) - start_idx)) * 100
+                    logging.info(f"📊 Live processing: {progress:.1f}% complete")
+        
+        # Start processing thread
+        process_thread = threading.Thread(target=continue_processing, daemon=True)
+        process_thread.start()
+        
+        # Keep plot alive
+        plt.show(block=True)
+        
+    except Exception as e:
+        logging.error(f"❌ Continued processing failed: {e}")
+
+        
+if __name__ == "__main__":
+    main()

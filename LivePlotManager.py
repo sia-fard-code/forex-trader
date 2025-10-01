@@ -34,7 +34,7 @@ class PlotControlObserver(ABC):
         pass
 
 class LivePlotManager:
-    def __init__(self, data_manager, max_display_points=500, update_interval=100):
+    def __init__(self, data_manager, max_display_points=500, update_interval=100, start_paused=True):
         """
         Enhanced Live plot manager with DataManager integration
         
@@ -51,6 +51,7 @@ class LivePlotManager:
         self.current_interval = update_interval
         self.speed_multiplier = 1.0
         self.control_observers = []
+        self.is_paused = start_paused
 
         # Control states
         self.is_paused = True
@@ -357,13 +358,26 @@ class LivePlotManager:
                 spine.set_edgecolor('#dee2e6')
                 spine.set_linewidth(2)
             
-            # Play/Pause Button
-            play_pause_ax = plt.axes([0.12, 0.16, 0.08, 0.05])  # Slightly smaller
-            self.play_pause_button = Button(play_pause_ax, '▶ Resume',
-                                        color='#45b7d1', hovercolor='#039be5')
+            # ✅ SMART: Play/Pause Button with dynamic initial state
+            play_pause_ax = plt.axes([0.12, 0.16, 0.08, 0.05])
+            
+            # Determine initial button state
+            if self.is_paused:
+                button_text = '▶️ Resume'
+                button_color = '#45b7d1'  # Blue
+                status_text = '⏸️ Paused - Click Resume to start'
+                status_color = '#e67e22'  # Orange
+            else:
+                button_text = '⏸️ Pause'
+                button_color = '#ff6b6b'  # Red
+                status_text = '▶️ Running - Training Mode Active'
+                status_color = '#27ae60'  # Green
+            
+            self.play_pause_button = Button(play_pause_ax, button_text,
+                                        color=button_color, hovercolor='#039be5')
             self.play_pause_button.label.set_fontweight('bold')
             self.play_pause_button.on_clicked(self._toggle_pause)
-            
+
             # Step Button
             step_ax = plt.axes([0.21, 0.16, 0.08, 0.05])
             self.step_button = Button(step_ax, '⏭ Step', 
@@ -414,7 +428,9 @@ class LivePlotManager:
                                           fontsize=10, color='#2c3e50')
             self.speed_text = self.fig.text(0.83, 0.11, 'Speed: 1.0x', 
                                           fontsize=10, color='#2c3e50')
-            
+            # Status text with smart initial state
+            self.status_text = self.fig.text(0.83, 0.17, status_text, 
+                                        fontsize=11, fontweight='bold', color=status_color)
                         
         except Exception as e:
             logging.error(f"Error setting up controls: {e}")

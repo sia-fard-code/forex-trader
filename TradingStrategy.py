@@ -23,6 +23,8 @@ class TradingStrategy:
         ✅ ENHANCED INITIALIZATION: DataManager-centric architecture
         Initialize TradingStrategy with zero-duplication LivePlotManager integration
         """
+        # ✅ CORE COMPONENT: DataManager as single source of truth
+        self.data_manager = DataManager(config)
         
         # 🚨 CRITICAL: Initialize threading components FIRST
         self.tick_queue = queue.Queue()
@@ -54,10 +56,13 @@ class TradingStrategy:
         self.last_processed_timestamp = None
         self._training_speed_set = False
         self._trading_speed_set = False
+        # ✅ NEW: Training mode controls
+        self.training_only_mode = False
+        self.delay_plot_mode = False
+        self.training_completed = False
+        self.plot_enabled_after_training = False
         
         try:
-            # ✅ CORE COMPONENT: DataManager as single source of truth
-            self.data_manager = DataManager(config)
             
             # Initialize processing components with DataManager
             self.market_processing_bid = MarketProcessing(self.data_manager, "bid")
@@ -86,16 +91,25 @@ class TradingStrategy:
             self.position_opening_handler = PositionOpeningHandler(
                 self.trade_manager, config.get("broker_config", {}))
             
-            # ✅ ENHANCED LIVE PLOTTING: DataManager integration
-            if self.enable_live_plot:
+            # Initialize live plot based on mode
+            if enable_live_plot and not getattr(self, 'delay_plot_mode', False):
+                # Normal mode: initialize plot immediately
                 from LivePlotManager import LivePlotManager
                 self.live_plotter = LivePlotManager(
-                    data_manager=self.data_manager,  # ✅ Pass DataManager reference
+                    data_manager=self.data_manager,
                     max_display_points=1000,
                     update_interval=100
                 )
-                logging.info("✅ DataManager-integrated live plotting enabled")
-                
+                logging.info("✅ Live plotting enabled from start")
+            elif enable_live_plot and getattr(self, 'delay_plot_mode', False):
+                # Delay mode: will initialize plot later
+                self.live_plotter = None
+                self.enable_live_plot = True  # Keep flag for later
+                logging.info("⏳ Live plotting will start after training")
+            else:
+                self.live_plotter = None
+                logging.info("🏃 Live plotting disabled for maximum training speed")        
+                   
         except Exception as e:
             logging.error(f"Component initialization failed: {e}")
             self.enable_live_plot = False
@@ -217,12 +231,13 @@ class TradingStrategy:
         
         # ✅ INITIALIZE PLOT IN MAIN THREAD: DataManager integration
         if self.enable_live_plot:
-            success = self._initialize_plot_with_datamanager()
+            success = self._initialize_plot_with_datamanager()            
             if not success:
                 logging.error("❌ Plot failed - running headless")
                 self._run_headless_mode(data)
                 return
-        
+        # ✅ NEW: Handle training modes and auto-resume
+        self._handle_training_modes()
         # ✅ START PROCESSING WITH SHUTDOWN MONITORING
         def processing_thread():
             """Enhanced processing with DataManager coordination"""
@@ -280,27 +295,78 @@ class TradingStrategy:
         logging.info("🎉 Enhanced strategy shutdown complete")
 
     def _initialize_plot_with_datamanager(self):
-        """✅ ENHANCED PLOT INITIALIZATION: With DataManager integration"""
+        """✅ ENHANCED: Plot initialization with smart start state"""
         try:
             logging.info("🎨 Initializing DataManager-integrated plot...")
+            
+            # ✅ SMART: Determine start state based on mode
+            should_start_paused = not (
+                getattr(self, 'training_only_mode', False) or 
+                getattr(self, 'delay_plot_mode', False)
+            )
             
             if not hasattr(self, 'live_plotter') or self.live_plotter is None:
                 from LivePlotManager import LivePlotManager
                 self.live_plotter = LivePlotManager(
-                    data_manager=self.data_manager,  # ✅ Pass DataManager
-                    max_display_points=1000
+                    data_manager=self.data_manager,
+                    max_display_points=1000,
+                    start_paused=should_start_paused  # ✅ Smart default
                 )
             
             # Setup observer relationship
             self.live_plotter.add_control_observer(self)
             
+            # ✅ AUTO-SYNC: Ensure processing event matches plot state
+            if not should_start_paused:
+                self.processing_event.set()
+                logging.info("🚀 Auto-resumed processing for training mode")
+            
             self.plot_initialized = True
-            logging.info("✅ DataManager-integrated plot ready")
+            logging.info(f"✅ DataManager-integrated plot ready (start_paused: {should_start_paused})")
             return True
             
         except Exception as e:
             logging.error(f"❌ DataManager plot setup failed: {e}")
             return False
+
+    def _run_headless_training(self, data):
+        """✅ ENHANCED: Maximum speed processing of ALL data"""
+        
+        logging.info("🏃 Starting headless training mode - processing all data...")
+        total_ticks = len(data)
+        
+        start_time = time.time()
+        
+        for idx, row in data.iterrows():
+            # Check for interruption
+            if self.shutdown_requested.is_set():
+                break
+                
+            tick_id = row["tick_id"]
+            bid = row["bid"]
+            ask = row["ask"] 
+            tick_timestamp = pd.to_datetime(row["timestamp"])
+            
+            # Process tick at maximum speed (no delays)
+            self.process_tick(idx, bid, ask, tick_id, tick_timestamp)
+            
+            # Minimal progress logging (every 10%)
+            if idx % (total_ticks // 10) == 0:
+                progress = (idx / total_ticks) * 100
+                elapsed = time.time() - start_time
+                rate = idx / elapsed if elapsed > 0 else 0
+                
+                logging.info(f"🏃 Progress: {progress:.0f}% ({idx:,}/{total_ticks:,}) "
+                            f"Rate: {rate:.0f} ticks/sec")
+        
+        # Final summary
+        total_time = time.time() - start_time
+        final_rate = total_ticks / total_time if total_time > 0 else 0
+        
+        logging.info(f"🎓 Headless processing completed!")
+        logging.info(f"⚡ Processed {total_ticks:,} ticks in {total_time:.1f} seconds")
+        logging.info(f"📈 Average rate: {final_rate:.0f} ticks/second")
+        logging.info(f"💾 DataManager contains {self.data_manager.get_size():,} data points")
 
     def _run_datamanager_coordinated_processing(self, data):
         """
@@ -361,9 +427,12 @@ class TradingStrategy:
             # ✅ PROCESS TICK: DataManager gets updated automatically
             self.process_tick(idx, bid, ask, tick_id, tick_timestamp)
             
-            # ✅ NO MANUAL PLOT UPDATE NEEDED: LivePlotManager queries DataManager directly!
-            # Plot updates happen automatically via DataManager queries
-            
+            # ✅ CONDITIONAL PLOTTING: Only plot after training or if not in training mode
+            should_plot = (
+                self.plot_initialized and 
+                not self.shutdown_requested.is_set() and
+                (self.training_completed or not getattr(self, 'delay_plot_mode', False))
+            )
             # Check for new trade arrows only
             if self.plot_initialized and not self.shutdown_requested.is_set():
                 self._check_for_new_trade_arrows(tick_timestamp, tick_id)
@@ -430,7 +499,19 @@ class TradingStrategy:
         current_size = self.data_manager.get_size() or 0
         training_window = self.config.get("training_window_size", 1000)
         is_trained = self.data_manager.get_config("is_trained")
-        
+
+        # Detect training completion
+        if not self.training_completed and is_trained and current_size >= training_window:
+            self.training_completed = True
+            
+            # ✅ CRITICAL: If in training-only mode, signal to stop processing
+            if getattr(self, 'training_only_mode', False):
+                logging.info("🎓 TRAINING-ONLY MODE: Training completed - signaling stop")
+                self.shutdown_requested.set()  # Signal to stop processing
+                self._handle_training_completion()
+                return  # Exit immediately, don't process this tick further
+            else:
+                self._handle_training_completion()
         # Enhanced speed control logging
         if is_trained and not self._trading_speed_set:
             self._trading_speed_set = True
@@ -561,6 +642,113 @@ class TradingStrategy:
         elapsed_time = end_time - start_time
         self.processing_times.append(elapsed_time)
 
+    def _handle_training_modes(self):
+        """✅ NEW: Handle training modes and auto-resume logic"""
+        try:
+            # If in training-only or delay-plot mode, auto-resume processing
+            if (getattr(self, 'training_only_mode', False) or 
+                getattr(self, 'delay_plot_mode', False)):
+                
+                # Auto-set processing event to resume immediately
+                self.processing_event.set()
+                
+                logging.info("🚀 Auto-resumed processing for training mode")
+                
+                # If plot is initialized, update its status
+                if self.plot_initialized and self.live_plotter:
+                    # Update button appearance to show resumed state
+                    if hasattr(self.live_plotter, 'play_pause_button'):
+                        self.live_plotter.play_pause_button.label.set_text('⏸️ Pause')
+                        self.live_plotter.play_pause_button.color = '#ff6b6b'
+                    
+                    if hasattr(self.live_plotter, 'status_text'):
+                        self.live_plotter.status_text.set_text('Status: ▶️ Training Mode - Auto-Running')
+                        self.live_plotter.status_text.set_color('#27ae60')
+                    
+                    # Set plot to not paused
+                    self.live_plotter.is_paused = False
+                    
+                    if self.live_plotter.fig and self.live_plotter.fig.canvas:
+                        self.live_plotter.fig.canvas.draw_idle()
+            
+        except Exception as e:
+            logging.error(f"Training mode setup failed: {e}")
+
+    def _handle_training_completion(self):
+        """✅ ENHANCED: Better training completion for training-only mode"""
+        try:
+            logging.info("🎓 TRAINING COMPLETED!")
+            
+            # ✅ FOR TRAINING-ONLY: Just log and continue processing
+            if getattr(self, 'training_only_mode', False):
+                self._show_training_summary()
+                # Don't initialize plot - continue processing all data
+                return
+            
+            # For other modes, handle plot initialization
+            if getattr(self, 'delay_plot_mode', False) and not self.plot_enabled_after_training:
+                logging.info("🎨 Initializing live plot after training completion...")
+                
+                from LivePlotManager import LivePlotManager
+                self.live_plotter = LivePlotManager(
+                    data_manager=self.data_manager,
+                    max_display_points=5000
+                )
+                
+                self.live_plotter.add_control_observer(self)
+                self.plot_initialized = True
+                self.plot_enabled_after_training = True
+                self.live_plotter.show()
+                
+                logging.info("✅ Live plot initialized after training")
+                
+        except Exception as e:
+            logging.error(f"❌ Training completion handling failed: {e}")
+
+    def _show_training_summary(self):
+        """✅ ENHANCED: Training summary for training-only mode"""
+        try:
+            if getattr(self, 'training_only_mode', False):
+                # Training-only mode: show completion and prepare for plot
+                dm_size = self.data_manager.get_size()
+                print(f"\n{'='*60}")
+                print(f"🎓 TRAINING-ONLY MODE COMPLETED")
+                print(f"{'='*60}")
+                print(f"📊 Training data processed: {dm_size:,} points")
+                print(f"🏃 Training ticks: {getattr(self, 'training_tick_count', 0):,}")
+                print(f"⚡ Processing stopped after training (as requested)")
+                print(f"💾 DataManager contains complete training dataset")
+                print(f"🎨 Ready to display interactive analysis plot")
+                print(f"{'='*60}")
+            else:
+                # Normal mode: brief message, continue processing
+                print(f"\n🎓 Training phase completed successfully!")
+                print(f"📊 Continuing to process remaining data...")
+                
+        except Exception as e:
+            logging.error(f"Training summary failed: {e}")
+
+    def _enable_live_plot_post_training(self):
+        """✅ NEW: Enable live plotting after training-only mode"""
+        try:
+            from LivePlotManager import LivePlotManager
+            self.live_plotter = LivePlotManager(
+                data_manager=self.data_manager,
+                max_display_points=self.data_manager.get_size()  # Show all data
+            )
+            
+            self.live_plotter.add_control_observer(self)
+            self.enable_live_plot = True
+            self.plot_initialized = True
+            
+            # Show the plot with all training data
+            self.live_plotter.show()
+            
+            logging.info("✅ Live plot enabled post-training with full dataset")
+            
+        except Exception as e:
+            logging.error(f"Post-training plot enabling failed: {e}")
+
     def _check_for_new_trade_arrows(self, timestamp, tick_id):
         """
         ✅ ENHANCED ARROW DETECTION: Using DataManager for position tracking
@@ -650,61 +838,122 @@ class TradingStrategy:
         
         return False
 
-    def _run_headless_mode(self, data):
-        """✅ HEADLESS MODE: Pure DataManager processing"""
-        logging.info("🔧 Running in headless mode - DataManager only")
+    def _run_headless_training(self, data):
+        """✅ ENHANCED: Process data with training-only early stop"""
+        
+        logging.info("🏃 Starting headless training mode...")
+        total_ticks = len(data)
+        processed_ticks = 0
+        
+        start_time = time.time()
         
         for idx, row in data.iterrows():
+            # Check for shutdown (including training completion stop)
             if self.shutdown_requested.is_set():
+                if self.training_completed:
+                    logging.info("🎓 Stopped processing after training completion")
+                else:
+                    logging.info("🛑 Processing interrupted by shutdown signal")
                 break
                 
             tick_id = row["tick_id"]
             bid = row["bid"]
-            ask = row["ask"]
+            ask = row["ask"] 
             tick_timestamp = pd.to_datetime(row["timestamp"])
             
+            # Process tick at maximum speed
             self.process_tick(idx, bid, ask, tick_id, tick_timestamp)
+            processed_ticks += 1
             
-            if idx % 1000 == 0:
-                dm_size = self.data_manager.get_size()
-                progress = idx / len(data) * 100
-                logging.info(f"🎯 Headless progress: {progress:.1f}% - "
-                           f"DataManager: {dm_size} points")
+            # Progress logging (every 10% or 1000 ticks, whichever is smaller)
+            log_interval = min(total_ticks // 10, 1000)
+            if log_interval > 0 and processed_ticks % log_interval == 0:
+                progress = (processed_ticks / total_ticks) * 100
+                elapsed = time.time() - start_time
+                rate = processed_ticks / elapsed if elapsed > 0 else 0
+                
+                logging.info(f"🏃 Progress: {progress:.0f}% ({processed_ticks:,}/{total_ticks:,}) "
+                            f"Rate: {rate:.0f} ticks/sec")
         
-        final_size = self.data_manager.get_size()
-        logging.info(f"✅ Headless processing completed - DataManager: {final_size} points")
+        # Final summary
+        total_time = time.time() - start_time
+        final_rate = processed_ticks / total_time if total_time > 0 else 0
+        
+        if self.training_completed:
+            logging.info(f"🎓 Training-only processing completed!")
+            logging.info(f"✅ Processed {processed_ticks:,} ticks (stopped after training)")
+        else:
+            logging.info(f"🎓 Headless processing completed!")
+            logging.info(f"✅ Processed {processed_ticks:,}/{total_ticks:,} ticks")
+        
+        logging.info(f"⚡ Processing time: {total_time:.1f} seconds")
+        logging.info(f"📈 Average rate: {final_rate:.0f} ticks/second")
+        logging.info(f"💾 DataManager contains {self.data_manager.get_size():,} data points")
+        
+        return processed_ticks
 
     def _calculate_profit_probability(self, price_type):
-        """Enhanced profit probability calculation with DataManager integration"""
+        """✅ FIXED: Profit probability calculation with proper indexing"""
         try:
             latest_data = self.data_manager.get_latest_data()
             initial_price = latest_data[f"ema_{price_type}"]
             spread = latest_data["spread"]
             required_profit_margin = spread * self.config.get("profitability_factor", 1.5)
             
-            # Calculate drift term using DataManager window
-            recent_returns_buffer = self.data_manager.get_window_data(200)[f"arithmetic_return_{price_type}"]
-            recent_returns = recent_returns_buffer[~np.isnan(recent_returns_buffer)][-50:] if len(recent_returns_buffer[~np.isnan(recent_returns_buffer)]) > 0 else np.array([])
+            # ✅ FIX: Get recent returns with proper array access
+            recent_returns_buffer = self.data_manager.get_window_data(200)
             
+            if recent_returns_buffer is not None and len(recent_returns_buffer) > 0:
+                # ✅ FIXED: Proper field access for numpy structured array
+                return_field = f"arithmetic_return_{price_type}"
+                if return_field in recent_returns_buffer.dtype.names:
+                    recent_returns_data = recent_returns_buffer[return_field]
+                    # ✅ FIXED: Filter out NaN values properly
+                    valid_returns = recent_returns_data[~np.isnan(recent_returns_data)]
+                    recent_returns = valid_returns[-50:] if len(valid_returns) > 50 else valid_returns
+                else:
+                    recent_returns = np.array([])
+            else:
+                recent_returns = np.array([])
+            
+            # Calculate drift
             drift_per_tick = np.mean(recent_returns) if len(recent_returns) > 0 else 0
             if np.isnan(drift_per_tick):
                 drift_per_tick = 0
 
-            # Model selection based on price type
-            model = self.market_processing_ask.model if price_type == 'ask' else self.market_processing_bid.model
-            scaling_factor = self.market_processing_ask.scaling_factor if price_type == 'ask' else self.market_processing_bid.scaling_factor
-            
-            vol_paths = self.market_processing_bid.simulated_vol_paths if price_type == 'bid' else self.market_processing_ask.simulated_vol_paths
-            price_paths = np.zeros((self.config.get("num_simulations", 5000), self.config.get("simulation_steps", 50)))
-            current_prices = np.full(self.config.get("num_simulations", 5000), initial_price)
-            
+            # ✅ FIXED: Get model and scaling factor safely
+            try:
+                if price_type == 'ask':
+                    model = self.market_processing_ask.model
+                    scaling_factor = self.market_processing_ask.scaling_factor
+                    vol_paths = self.market_processing_ask.simulated_vol_paths
+                else:  # bid
+                    model = self.market_processing_bid.model
+                    scaling_factor = self.market_processing_bid.scaling_factor
+                    vol_paths = self.market_processing_bid.simulated_vol_paths
+            except AttributeError:
+                logging.warning(f"⚠️ Model or scaling factor not available for {price_type}")
+                return 0.0
+
             # Monte Carlo simulation
-            for i in range(self.config.get("simulation_steps", 50)):
-                de_scaled_vols = vol_paths[:, i] / scaling_factor
-                log_return_shocks = np.random.normal(0, 1, size=self.config.get("num_simulations", 5000))
-                simulated_log_returns = drift_per_tick + (de_scaled_vols * log_return_shocks)
-                current_prices = current_prices * np.exp(simulated_log_returns)
-                price_paths[:, i] = current_prices
+            num_simulations = self.config.get("num_simulations", 5000)
+            simulation_steps = self.config.get("simulation_steps", 50)
+            
+            if vol_paths is None or vol_paths.shape[1] < simulation_steps:
+                logging.warning(f"⚠️ Insufficient volatility paths for {price_type}")
+                return 0.0
+            
+            price_paths = np.zeros((num_simulations, simulation_steps))
+            current_prices = np.full(num_simulations, initial_price)
+            
+            for i in range(simulation_steps):
+                # ✅ FIXED: Proper array indexing
+                if i < vol_paths.shape[1]:
+                    de_scaled_vols = vol_paths[:num_simulations, i] / scaling_factor
+                    log_return_shocks = np.random.normal(0, 1, size=num_simulations)
+                    simulated_log_returns = drift_per_tick + (de_scaled_vols * log_return_shocks)
+                    current_prices = current_prices * np.exp(simulated_log_returns)
+                    price_paths[:, i] = current_prices
 
             final_price_distribution = price_paths[:, -1]
             successful_simulations = 0
@@ -716,11 +965,14 @@ class TradingStrategy:
                 target_price = initial_price - required_profit_margin
                 successful_simulations = np.sum(final_price_distribution < target_price)
                 
-            probability = successful_simulations / self.config.get("num_simulations", 5000)
+            probability = successful_simulations / num_simulations
             return probability
             
         except Exception as e:
             logging.error(f"Profit probability calculation failed for {price_type}: {e}")
+            # ✅ ADD: More detailed error info
+            import traceback
+            logging.debug(f"Detailed error: {traceback.format_exc()}")
             return 0.0
 
     def _estimate_processing_time(self):
