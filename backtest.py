@@ -1,5 +1,5 @@
-import matplotlib
-matplotlib.use('Qt5Agg')  # or 'Qt5Agg' depending on your system
+# import matplotlib
+# matplotlib.use('Qt5Agg')  # or 'Qt5Agg' depending on your system
 import pandas as pd
 import numpy as np
 import logging
@@ -10,7 +10,10 @@ from matplotlib.lines import Line2D
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 plt.ion()
+import warnings
 
+# Filter out the specific glyph warning
+warnings.filterwarnings('ignore', message='Glyph.*missing from font.*')
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 

@@ -115,7 +115,8 @@ class TradingStrategy:
         return ewma_positions.values
 
     def worker_process(self):
-        """Enhanced worker with DataManager coordination"""
+        """✅ CORRECT: Speed control in data processing, not plot rendering"""
+        
         while not self.shutdown_event.is_set():
             try:
                 tick_data = self.tick_queue.get(timeout=1)
@@ -125,14 +126,39 @@ class TradingStrategy:
                     self.tick_queue.task_done()
                     break
                 
-                # Extract tick data
+                # ✅ SPEED CONTROL: Sleep based on live plot speed
+                if self.enable_live_plot and hasattr(self, 'live_plotter'):
+                    try:
+                        speed_multiplier = getattr(self.live_plotter, 'speed_multiplier', 1.0)
+                        
+                        # Calculate delay based on speed multiplier
+                        if speed_multiplier > 0:
+                            base_delay = 0.01  # 10ms base processing delay
+                            actual_delay = base_delay / speed_multiplier
+                            
+                            # Reasonable bounds: 1ms to 200ms
+                            actual_delay = max(0.001, min(actual_delay, 0.2))
+                            
+                            time.sleep(actual_delay)
+                            
+                            if hasattr(self, '_last_speed_log_time'):
+                                if time.time() - self._last_speed_log_time > 5.0:  # Log every 5 seconds
+                                    logging.debug(f"📈 Processing speed: {speed_multiplier:.1f}x (delay: {actual_delay*1000:.1f}ms)")
+                                    self._last_speed_log_time = time.time()
+                            else:
+                                self._last_speed_log_time = time.time()
+                                
+                    except Exception as speed_error:
+                        logging.debug(f"Speed control error: {speed_error}")
+                
+                # Extract and process tick data
                 t = tick_data['t']
                 bid = tick_data['bid']
                 ask = tick_data['ask']
                 tick_id = tick_data['tick_id']
                 timestamp = tick_data['timestamp']
                 
-                # Process tick (DataManager gets updated automatically)
+                # Process the tick
                 self.process_tick(t, bid, ask, tick_id, timestamp)
                 self.tick_queue.task_done()
                 
@@ -301,7 +327,30 @@ class TradingStrategy:
             
             if self.shutdown_requested.is_set():
                 break
-            
+            # ✅ SPEED CONTROL: Apply delay based on live plot speed
+            if self.enable_live_plot and hasattr(self, 'live_plotter'):
+                try:
+                    speed_multiplier = getattr(self.live_plotter, 'speed_multiplier', 1.0)
+                    
+                    if speed_multiplier > 0:
+                        # Different delays for training vs live phases
+                        training_window = self.config.get("training_window_size", 1000)
+                        
+                        if idx < training_window:
+                            # Training phase: faster processing
+                            base_delay = 0.001  # 1ms base delay
+                        else:
+                            # Live phase: more realistic timing
+                            base_delay = 0.01   # 10ms base delay
+                        
+                        actual_delay = base_delay / speed_multiplier
+                        actual_delay = max(0.0001, min(actual_delay, 0.5))  # 0.1ms to 500ms bounds
+                        
+                        time.sleep(actual_delay)
+                        
+                except Exception as speed_error:
+                    logging.debug(f"Speed control error: {speed_error}")
+
             # Extract tick data
             tick_id = row["tick_id"]
             bid = row["bid"] 
@@ -578,21 +627,28 @@ class TradingStrategy:
             return current_timestamp - pd.Timedelta(seconds=30)
 
     def set_live_plot_speed(self, speed):
-        """✅ ENHANCED SPEED CONTROL: With DataManager coordination"""
+        """✅ ENHANCED: Set processing speed (not just plot refresh speed)"""
         if self.enable_live_plot and self.live_plotter:
             try:
-                old_speed = getattr(self.live_plotter, 'speed_multiplier', 1.0)
-                self.live_plotter.set_speed(speed)
-                new_speed = getattr(self.live_plotter, 'speed_multiplier', speed)
+                # Update the speed multiplier
+                self.live_plotter.speed_multiplier = speed
                 
-                if abs(new_speed - speed) > 0.1:
-                    logging.warning(f"Speed change verification failed: "
-                                  f"requested {speed}x, got {new_speed}x")
-                else:
-                    logging.info(f"📈 DataManager-synced plot speed: {old_speed:.1f}x → {new_speed:.1f}x")
-                    
+                # Update slider display
+                if hasattr(self.live_plotter, 'speed_slider'):
+                    self.live_plotter.speed_slider.set_val(speed)
+                
+                # Update text display
+                if hasattr(self.live_plotter, 'speed_text'):
+                    self.live_plotter.speed_text.set_text(f'Speed: {speed:.1f}x')
+                
+                logging.info(f"📈 Processing speed set to {speed:.1f}x")
+                return True
+                
             except Exception as e:
-                logging.error(f"Failed to set live plot speed: {e}")
+                logging.error(f"Failed to set processing speed: {e}")
+                return False
+        
+        return False
 
     def _run_headless_mode(self, data):
         """✅ HEADLESS MODE: Pure DataManager processing"""

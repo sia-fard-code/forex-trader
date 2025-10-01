@@ -324,7 +324,7 @@ class LivePlotManager:
             # Initialize animation
             try:
                 self.animation = animation.FuncAnimation(
-                    self.fig, self._update_plot, interval=self.update_interval, 
+                    self.fig, self._update_plot, interval=50, 
                     blit=False, cache_frame_data=False, repeat=True
                 )
                 logging.info("✅ Animation initialized successfully")
@@ -359,14 +359,14 @@ class LivePlotManager:
             
             # Play/Pause Button
             play_pause_ax = plt.axes([0.12, 0.16, 0.08, 0.05])  # Slightly smaller
-            self.play_pause_button = Button(play_pause_ax, '▶️ Resume',
+            self.play_pause_button = Button(play_pause_ax, '▶ Resume',
                                         color='#45b7d1', hovercolor='#039be5')
             self.play_pause_button.label.set_fontweight('bold')
             self.play_pause_button.on_clicked(self._toggle_pause)
             
             # Step Button
             step_ax = plt.axes([0.21, 0.16, 0.08, 0.05])
-            self.step_button = Button(step_ax, '⏭️ Step', 
+            self.step_button = Button(step_ax, '⏭ Step', 
                                     color='#4ecdc4', hovercolor='#26a69a')
             self.step_button.label.set_fontweight('bold')
             self.step_button.on_clicked(self._step_forward)
@@ -420,51 +420,35 @@ class LivePlotManager:
             logging.error(f"Error setting up controls: {e}")
 
     def _update_plot(self, frame):
-        """
-        ✅ STREAMLINED PLOT UPDATE: Using DataManager queries instead of queues
-        """
+        """✅ CLEAN: No sleep delay - just render as fast as possible"""
         try:
             self.update_count += 1
             
-            # Control logic
+            # Control logic (no sleep here)
             if self.is_paused and not self.step_requested:
                 return
             
             if self.step_requested:
                 self.step_requested = False
             
-            # ✅ DIRECT DATA ACCESS: Get fresh data from DataManager
+            # Render data as fast as possible
             plot_data = self._get_plot_window()
             
             if len(plot_data['timestamps']) == 0:
                 return
             
-            # Process trade arrows (still queue-based for thread safety)
+            # Process and render (existing logic)
             self._process_trade_arrows()
-            
-            # ✅ RENDER ALL ELEMENTS: From DataManager data
             self._render_plot_elements(plot_data)
-            
-            # Handle axis scaling with user interaction respect
             self._handle_axis_scaling(plot_data)
-            
-            # Update statistics with rich DataManager info
             self._update_plot_statistics(plot_data)
             
-            # Reset cache for next update
             self._cache_valid = False
-            
-            # Reset step mode
             if self.step_mode:
                 self.step_mode = False
                 
         except Exception as e:
-            logging.error(f"❌ Error updating enhanced live plot: {e}")
-            import traceback
-            traceback.print_exc()
-
-            # ✅ ADD: Setup synchronized navigation after axes creation
-            self._setup_synchronized_navigation()
+            logging.error(f"❌ Error updating plot: {e}")
 
     def _setup_mouse_interaction_detection(self):
         """
@@ -1424,35 +1408,22 @@ class LivePlotManager:
             logging.error(f"Error resetting plot: {e}")
 
     def _update_speed(self, val):
-        """Update animation speed"""
+        """✅ SIMPLE: Just update speed multiplier - worker_process handles the rest"""
         try:
+            old_speed = self.speed_multiplier
             self.speed_multiplier = val
-            self.current_interval = max(10, min(2000, int(self.base_update_interval / val)))
-            
-            # Stop current animation
-            if hasattr(self, 'animation') and self.animation:
-                self.animation.event_source.stop()
-            
-            # Create new animation with updated interval
-            self.animation = animation.FuncAnimation(
-                self.fig, self._update_plot, interval=self.current_interval, 
-                blit=False, cache_frame_data=False, repeat=True
-            )
-            
-            # Restore pause state
-            if self.is_paused:
-                self.animation.pause()
             
             # Update display
-            self.speed_text.set_text(f'Speed: {val:.1f}x')
+            if hasattr(self, 'speed_text'):
+                self.speed_text.set_text(f'Speed: {val:.1f}x')
             
             if self.fig and self.fig.canvas:
                 self.fig.canvas.draw_idle()
             
-            logging.info(f"📈 Speed updated to {val:.1f}x")
+            logging.info(f"📈 Processing speed updated: {old_speed:.1f}x → {val:.1f}x")
             
         except Exception as e:
-            logging.error(f"Error updating speed: {e}")
+            logging.error(f"Speed update failed: {e}")
 
     def _update_max_points(self, val):
         """Update maximum display points"""
