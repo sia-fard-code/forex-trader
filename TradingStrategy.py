@@ -8,7 +8,6 @@ from PositionSizing import PositionSizing
 from DataManager import DataManager
 from PositionClosureHandler import PositionClosureHandler
 from PositionOpeningHandler import PositionOpeningHandler
-from LivePlot import LivePlotWithSlider
 
 import logging
 import time
